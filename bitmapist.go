@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -129,6 +130,7 @@ func (s *srv) persist() {
 			s.mu.Unlock()
 
 			begin := time.Now()
+			buf := new(bytes.Buffer)
 			for _, k := range keys {
 				s.mu.Lock()
 				bm, ok := s.bitmaps[k]
@@ -138,16 +140,20 @@ func (s *srv) persist() {
 				}
 				bm = bm.Clone()
 				s.mu.Unlock()
+				buf.Reset()
+				if _, err := bm.WriteTo(buf); err != nil {
+					return err
+				}
 				hdr := &tar.Header{
 					Name:    k,
 					Mode:    0644,
-					Size:    int64(bm.GetSerializedSizeInBytes()),
+					Size:    int64(buf.Len()),
 					ModTime: time.Now(),
 				}
 				if err := tw.WriteHeader(hdr); err != nil {
 					return err
 				}
-				if _, err := bm.WriteTo(tw); err != nil {
+				if _, err := buf.WriteTo(tw); err != nil {
 					return err
 				}
 			}
