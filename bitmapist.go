@@ -17,6 +17,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/artyom/autoflags"
+	"github.com/golang/snappy"
 	"github.com/mediocregopher/radix.v2/redis"
 	"github.com/tidwall/redcon"
 )
@@ -27,12 +28,15 @@ func main() {
 		File string `flag:"dump,path to dump file"`
 	}{
 		Addr: "localhost:6379",
-		File: "dump.tar",
+		File: "dump.tar.sz",
 	}
 	autoflags.Define(&args)
 	flag.Parse()
 
 	s := newSrv(args.File)
+	if args.File != "" {
+		log.Println("loading data from", args.File)
+	}
 	begin := time.Now()
 	if err := s.restore(); err != nil {
 		log.Fatal(err)
@@ -76,7 +80,7 @@ func (s *srv) restore() error {
 		return err
 	}
 	defer f.Close()
-	tr := tar.NewReader(f)
+	tr := tar.NewReader(snappy.NewReader(f))
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -108,19 +112,21 @@ func (s *srv) persist() {
 	s.saving = true
 	go func() {
 		err := func() error {
-			s.log.Println("saving state")
+			s.log.Println("saving state...")
 			defer func() {
 				s.mu.Lock()
 				s.saving = false
 				s.mu.Unlock()
 			}()
-			tf, err := ioutil.TempFile(filepath.Dir(s.saveFile), "")
+			tf, err := ioutil.TempFile(filepath.Dir(s.saveFile), "bitmapist-temp-")
 			if err != nil {
 				return err
 			}
 			defer tf.Close()
 			defer os.Remove(tf.Name())
-			tw := tar.NewWriter(tf)
+			sw := snappy.NewBufferedWriter(tf)
+			defer sw.Close()
+			tw := tar.NewWriter(sw)
 			defer tw.Close()
 
 			s.mu.Lock()
@@ -159,6 +165,9 @@ func (s *srv) persist() {
 				}
 			}
 			if err := tw.Close(); err != nil {
+				return err
+			}
+			if err := sw.Close(); err != nil {
 				return err
 			}
 			if err := tf.Close(); err != nil {
