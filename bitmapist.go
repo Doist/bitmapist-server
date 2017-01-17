@@ -560,11 +560,12 @@ func revbits(b byte) byte {
 }
 
 func growBuf(buf []byte, upTo int) []byte {
-	// TODO: optimize to increase in larger chunks when possible
-	for s := len(buf); s < upTo; s++ {
-		buf = append(buf, 0)
+	if len(buf) >= upTo {
+		return buf
 	}
-	return buf
+	dst := make([]byte, upTo, upTo*3/2)
+	copy(dst, buf)
+	return dst
 }
 
 var (
