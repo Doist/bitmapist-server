@@ -1,14 +1,18 @@
 package main
 
 import (
+	"archive/tar"
 	"flag"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/artyom/autoflags"
@@ -21,11 +25,19 @@ func main() {
 		File string `flag:"dump,path to dump file"`
 	}{
 		Addr: "localhost:6379",
+		File: "dump.tar",
 	}
 	autoflags.Define(&args)
 	flag.Parse()
 
-	s := newSrv()
+	s := newSrv(args.File)
+	begin := time.Now()
+	if err := s.restore(); err != nil {
+		log.Fatal(err)
+	}
+	if args.File != "" {
+		log.Println("state restored in", time.Since(begin))
+	}
 
 	rs := redcon.NewServer(args.Addr, s.redisHandler, nil, nil)
 	if err := rs.ListenAndServe(); err != nil {
@@ -33,18 +45,128 @@ func main() {
 	}
 }
 
-func newSrv() *srv {
+func newSrv(saveFile string) *srv {
 	return &srv{
-		log:     log.New(os.Stderr, "", log.LstdFlags),
-		bitmaps: make(map[string]*roaring.Bitmap),
+		saveFile: saveFile,
+		log:      log.New(os.Stderr, "", log.LstdFlags),
+		bitmaps:  make(map[string]*roaring.Bitmap),
 	}
 }
 
 type srv struct {
-	log *log.Logger
+	saveFile string
+	log      *log.Logger
 
 	mu      sync.Mutex
 	bitmaps map[string]*roaring.Bitmap
+	saving  bool
+}
+
+func (s *srv) restore() error {
+	if s.saveFile == "" {
+		return nil
+	}
+	f, err := os.Open(s.saveFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	tr := tar.NewReader(f)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		bm := roaring.NewBitmap()
+		if _, err := bm.ReadFrom(tr); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.bitmaps[hdr.Name] = bm
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+func (s *srv) persist() {
+	if s.saveFile == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.saving {
+		return
+	}
+	s.saving = true
+	go func() {
+		err := func() error {
+			s.log.Println("saving state")
+			defer func() {
+				s.mu.Lock()
+				s.saving = false
+				s.mu.Unlock()
+			}()
+			tf, err := ioutil.TempFile(filepath.Dir(s.saveFile), "")
+			if err != nil {
+				return err
+			}
+			defer tf.Close()
+			defer os.Remove(tf.Name())
+			tw := tar.NewWriter(tf)
+			defer tw.Close()
+
+			s.mu.Lock()
+			keys := make([]string, 0, len(s.bitmaps))
+			for k := range s.bitmaps {
+				keys = append(keys, k)
+			}
+			s.mu.Unlock()
+
+			begin := time.Now()
+			for _, k := range keys {
+				s.mu.Lock()
+				bm, ok := s.bitmaps[k]
+				if !ok {
+					s.mu.Unlock()
+					continue
+				}
+				bm = bm.Clone()
+				s.mu.Unlock()
+				hdr := &tar.Header{
+					Name:    k,
+					Mode:    0644,
+					Size:    int64(bm.GetSerializedSizeInBytes()),
+					ModTime: time.Now(),
+				}
+				if err := tw.WriteHeader(hdr); err != nil {
+					return err
+				}
+				if _, err := bm.WriteTo(tw); err != nil {
+					return err
+				}
+			}
+			if err := tw.Close(); err != nil {
+				return err
+			}
+			if err := tf.Close(); err != nil {
+				return err
+			}
+			if err := os.Rename(tf.Name(), s.saveFile); err != nil {
+				return err
+			}
+			s.log.Printf("saved %d bitmaps in %v", len(keys), time.Since(begin))
+			return nil
+		}()
+		if err != nil {
+			s.log.Println("error saving state:", err)
+		}
+	}()
 }
 
 func (s *srv) redisHandler(conn redcon.Conn, cmd redcon.Command) {
@@ -72,6 +194,8 @@ func (s *srv) redisHandler(conn redcon.Conn, cmd redcon.Command) {
 		s.handleDel(conn, cmd.Args)
 	case "get":
 		s.handleGet(conn, cmd.Args)
+	case "bgsave":
+		s.handleBgsave(conn, cmd.Args)
 	}
 }
 
@@ -86,6 +210,19 @@ func (s *srv) handleGet(conn redcon.Conn, args [][]byte) {
 	default:
 		conn.WriteBulk(b)
 	}
+}
+
+func (s *srv) handleBgsave(conn redcon.Conn, args [][]byte) {
+	if len(args) != 1 {
+		conn.WriteError(errWrongArguments)
+		return
+	}
+	if s.saveFile == "" {
+		conn.WriteError("ERR no save file configured")
+		return
+	}
+	s.persist()
+	conn.WriteString("OK")
 }
 
 func (s *srv) handleDel(conn redcon.Conn, args [][]byte) {
