@@ -17,6 +17,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/artyom/autoflags"
+	"github.com/mediocregopher/radix.v2/redis"
 	"github.com/tidwall/redcon"
 )
 
@@ -202,7 +203,27 @@ func (s *srv) redisHandler(conn redcon.Conn, cmd redcon.Command) {
 		s.handleGet(conn, cmd.Args)
 	case "bgsave":
 		s.handleBgsave(conn, cmd.Args)
+	case "slurp":
+		s.handleSlurp(conn, cmd.Args)
 	}
+}
+
+func (s *srv) handleSlurp(conn redcon.Conn, args [][]byte) {
+	if len(args) != 2 {
+		conn.WriteError(errWrongArguments)
+		return
+	}
+	addr := string(args[1])
+	go func() {
+		s.log.Println("importing redis dataset from", addr)
+		begin := time.Now()
+		if err := s.redisImport(addr); err != nil {
+			s.log.Println("redis import error:", err)
+			return
+		}
+		s.log.Println("import from redis completed in", time.Since(begin))
+	}()
+	conn.WriteString("OK")
 }
 
 func (s *srv) handleGet(conn redcon.Conn, args [][]byte) {
@@ -541,3 +562,45 @@ var (
 	errWrongArguments = "ERR wrong command arguments"
 	errBadKeyName     = "ERR bad key name"
 )
+
+func (s *srv) redisImport(addr string) error {
+	client, err := redis.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	mr, err := client.Cmd("KEYS", "*").Array()
+	if err != nil {
+		return err
+	}
+	var vals []uint32
+	for _, r := range mr {
+		key, err := r.Str()
+		if err != nil {
+			continue
+		}
+		data, err := client.Cmd("GET", key).Bytes()
+		if err != nil {
+			continue
+		}
+		vals = vals[:0]
+		for i, b := range data {
+			if b == 0 {
+				continue
+			}
+			for j := byte(0); j <= 7; j++ {
+				if b&(1<<(7-j)) != 0 {
+					vals = append(vals, uint32(i*8)+uint32(j))
+				}
+			}
+		}
+		if len(vals) == 0 {
+			continue
+		}
+		bm := roaring.BitmapOf(vals...)
+		s.mu.Lock()
+		s.bitmaps[key] = bm
+		s.mu.Unlock()
+	}
+	return nil
+}
