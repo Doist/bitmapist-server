@@ -173,6 +173,9 @@ func (s *srv) persist() {
 			if err := tf.Close(); err != nil {
 				return err
 			}
+			if err := os.Chmod(tf.Name(), 0644); err != nil {
+				return err
+			}
 			if err := os.Rename(tf.Name(), s.saveFile); err != nil {
 				return err
 			}
