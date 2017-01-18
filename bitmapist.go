@@ -566,6 +566,14 @@ func growBuf(buf []byte, upTo int) []byte {
 	if len(buf) >= upTo {
 		return buf
 	}
+	if cap(buf) > upTo {
+		var scratch [4096]byte
+		for s := upTo - len(buf); s > len(scratch); s -= len(scratch) {
+			buf = append(buf, scratch[:]...)
+		}
+		buf = append(buf, scratch[:upTo-len(buf)]...)
+		return buf
+	}
 	dst := make([]byte, upTo, upTo*3/2)
 	copy(dst, buf)
 	return dst
