@@ -46,6 +46,7 @@ func main() {
 		log.Println("state restored in", time.Since(begin))
 	}
 	srv := red.NewServer()
+	srv.WithLogger(log.New(os.Stderr, "", log.LstdFlags))
 	srv.Handle("keys", s.handleKeys)
 	srv.Handle("setbit", s.handleSetbit)
 	srv.Handle("getbit", s.handleGetbit)
