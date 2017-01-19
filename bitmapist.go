@@ -56,6 +56,8 @@ func main() {
 	srv.Handle("get", s.handleGet)
 	srv.Handle("bgsave", s.handleBgsave)
 	srv.Handle("slurp", s.handleSlurp)
+	srv.Handle("scan", s.handleScan)
+	srv.Handle("select", handleSelect)
 	log.Fatal(srv.ListenAndServe(args.Addr))
 }
 
@@ -316,6 +318,20 @@ func (s *srv) handleKeys(r red.Request) (interface{}, error) {
 	return s.keys(r.Args[0])
 }
 
+func (s *srv) handleScan(r red.Request) (interface{}, error) {
+	// SCAN 0 MATCH trackist_* COUNT 2
+	if len(r.Args) != 5 || r.Args[0] != "0" ||
+		strings.ToLower(r.Args[1]) != "match" ||
+		strings.ToLower(r.Args[3]) != "count" {
+		return nil, red.ErrWrongArgs
+	}
+	keys, err := s.keys(r.Args[2])
+	if err != nil {
+		return nil, err
+	}
+	return resp.Array{"0", keys}, nil
+}
+
 func (s *srv) setBit(key string, offset uint32) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -534,4 +550,16 @@ func (s *srv) redisImport(addr string) error {
 		s.mu.Unlock()
 	}
 	return nil
+}
+
+func handleSelect(r red.Request) (interface{}, error) {
+	if len(r.Args) != 1 {
+		return nil, red.ErrWrongArgs
+	}
+	switch r.Args[0] {
+	case "0":
+		return resp.OK, nil
+	default:
+		return nil, errors.New("invalid DB index")
+	}
 }
