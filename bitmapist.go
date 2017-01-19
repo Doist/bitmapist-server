@@ -260,7 +260,10 @@ func (s *srv) handleBitop(r red.Request) (interface{}, error) {
 			return nil, red.ErrWrongArgs
 		}
 	case "not":
-		return nil, errors.New("bitop NOT is not supported")
+		if len(r.Args) != 3 {
+			return nil, red.ErrWrongArgs
+		}
+		return s.bitopNot(r.Args[1], r.Args[2])
 	}
 	dst := r.Args[1]
 	sources := r.Args[2:]
@@ -451,6 +454,30 @@ func (s *srv) bitopXor(key string, sources []string) int64 {
 	}
 	s.bitmaps[key] = roaring.HeapXor(src...)
 	return int64(s.bitmaps[key].GetCardinality())
+}
+
+func (s *srv) bitopNot(dst, src string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b1, ok := s.bitmaps[src]
+	if !ok {
+		delete(s.bitmaps, dst)
+		return 0, nil
+	}
+	max, err := b1.Select(uint32(b1.GetCardinality() - 1))
+	if err != nil {
+		return 0, err
+	}
+	upper := uint64(max + 1) // +1 because [rangeStart,rangeEnd)
+	// when redis does BITOP NOT, it operates on byte boundary, so resulting
+	// bitmap may have last byte padded with ones - mimick this by moving
+	// upper bound to fit byte boundaries
+	if x := upper % 8; x != 0 {
+		upper += (8 - x)
+	}
+	b2 := roaring.Flip(b1, 0, upper)
+	s.bitmaps[dst] = b2
+	return int64(b2.GetCardinality()), nil
 }
 
 func (s *srv) delete(keys ...string) int {
