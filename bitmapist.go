@@ -386,8 +386,7 @@ func (s *srv) cardinality(key string) int {
 	defer s.mu.Unlock()
 	bm, ok := s.bitmaps[key]
 	if !ok {
-		bm = roaring.New()
-		s.bitmaps[key] = bm
+		return 0
 	}
 	return int(bm.GetCardinality())
 }
