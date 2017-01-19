@@ -368,7 +368,7 @@ func (s *srv) contains(key string, offset uint32) bool {
 func (s *srv) keys(pattern string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var keys []string
+	keys := []string{}
 	for k := range s.bitmaps {
 		ok, err := filepath.Match(pattern, k)
 		if err != nil {
