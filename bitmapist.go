@@ -3,8 +3,8 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -17,9 +17,10 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/artyom/autoflags"
+	"github.com/artyom/red"
+	"github.com/artyom/resp"
 	"github.com/golang/snappy"
 	"github.com/mediocregopher/radix.v2/redis"
-	"github.com/tidwall/redcon"
 )
 
 func main() {
@@ -44,11 +45,18 @@ func main() {
 	if args.File != "" {
 		log.Println("state restored in", time.Since(begin))
 	}
-
-	rs := redcon.NewServer(args.Addr, s.redisHandler, nil, nil)
-	if err := rs.ListenAndServe(); err != nil {
-		log.Fatal(err)
-	}
+	srv := red.NewServer()
+	srv.Handle("keys", s.handleKeys)
+	srv.Handle("setbit", s.handleSetbit)
+	srv.Handle("getbit", s.handleGetbit)
+	srv.Handle("bitcount", s.handleBitcount)
+	srv.Handle("bitop", s.handleBitop)
+	srv.Handle("exists", s.handleExists)
+	srv.Handle("del", s.handleDel)
+	srv.Handle("get", s.handleGet)
+	srv.Handle("bgsave", s.handleBgsave)
+	srv.Handle("slurp", s.handleSlurp)
+	log.Fatal(srv.ListenAndServe(args.Addr))
 }
 
 func newSrv(saveFile string) *srv {
@@ -188,44 +196,11 @@ func (s *srv) persist() {
 	}()
 }
 
-func (s *srv) redisHandler(conn redcon.Conn, cmd redcon.Command) {
-	switch strings.ToLower(string(cmd.Args[0])) {
-	default:
-		conn.WriteError(fmt.Sprintf("ERR unsupported command '%s'", cmd.Args[0]))
-	case "ping":
-		conn.WriteString("PONG")
-	case "quit":
-		conn.WriteString("OK")
-		conn.Close()
-	case "keys":
-		s.handleKeys(conn, cmd.Args)
-	case "setbit":
-		s.handleSetbit(conn, cmd.Args)
-	case "getbit":
-		s.handleGetbit(conn, cmd.Args)
-	case "bitcount":
-		s.handleBitcount(conn, cmd.Args)
-	case "bitop":
-		s.handleBitop(conn, cmd.Args)
-	case "exists":
-		s.handleExists(conn, cmd.Args)
-	case "del":
-		s.handleDel(conn, cmd.Args)
-	case "get":
-		s.handleGet(conn, cmd.Args)
-	case "bgsave":
-		s.handleBgsave(conn, cmd.Args)
-	case "slurp":
-		s.handleSlurp(conn, cmd.Args)
+func (s *srv) handleSlurp(req red.Request) (interface{}, error) {
+	if len(req.Args) != 1 {
+		return nil, red.ErrWrongArgs
 	}
-}
-
-func (s *srv) handleSlurp(conn redcon.Conn, args [][]byte) {
-	if len(args) != 2 {
-		conn.WriteError(errWrongArguments)
-		return
-	}
-	addr := string(args[1])
+	addr := req.Args[0]
 	go func() {
 		s.log.Println("importing redis dataset from", addr)
 		begin := time.Now()
@@ -235,84 +210,58 @@ func (s *srv) handleSlurp(conn redcon.Conn, args [][]byte) {
 		}
 		s.log.Println("import from redis completed in", time.Since(begin))
 	}()
-	conn.WriteString("OK")
+	return resp.OK{}, nil
 }
 
-func (s *srv) handleGet(conn redcon.Conn, args [][]byte) {
-	if len(args) < 2 {
-		conn.WriteError(errWrongArguments)
-		return
+func (s *srv) handleGet(req red.Request) (interface{}, error) {
+	if len(req.Args) != 1 {
+		return nil, red.ErrWrongArgs
 	}
-	switch b := s.bitmapBytes(string(args[1])); b {
-	case nil:
-		conn.WriteNull()
-	default:
-		conn.WriteBulk(b)
-	}
+	return s.bitmapBytes(req.Args[0]), nil
 }
 
-func (s *srv) handleBgsave(conn redcon.Conn, args [][]byte) {
-	if len(args) != 1 {
-		conn.WriteError(errWrongArguments)
-		return
+func (s *srv) handleBgsave(r red.Request) (interface{}, error) {
+	if len(r.Args) != 0 {
+		return nil, red.ErrWrongArgs
 	}
 	if s.saveFile == "" {
-		conn.WriteError("ERR no save file configured")
-		return
+		return nil, errors.New("no save file configured")
 	}
 	s.persist()
-	conn.WriteString("OK")
+	return resp.OK{}, nil
 }
 
-func (s *srv) handleDel(conn redcon.Conn, args [][]byte) {
-	if len(args) < 2 {
-		conn.WriteError(errWrongArguments)
-		return
+func (s *srv) handleDel(r red.Request) (interface{}, error) {
+	if len(r.Args) < 1 {
+		return nil, red.ErrWrongArgs
 	}
-	keys := make([]string, len(args[1:]))
-	for i, k := range args[1:] {
-		keys[i] = string(k)
-	}
-	conn.WriteInt(s.delete(keys...))
+	return int64(s.delete(r.Args...)), nil
 }
 
-func (s *srv) handleExists(conn redcon.Conn, args [][]byte) {
-	if len(args) != 2 {
-		conn.WriteError(errWrongArguments)
-		return
+func (s *srv) handleExists(r red.Request) (interface{}, error) {
+	if len(r.Args) != 1 {
+		return nil, red.ErrWrongArgs
 	}
-	switch {
-	case s.exists(string(args[1])):
-		conn.WriteInt(1)
-	default:
-		conn.WriteInt(0)
-	}
+	return s.exists(r.Args[0]), nil
 }
 
-func (s *srv) handleBitop(conn redcon.Conn, args [][]byte) {
-	if len(args) < 4 {
-		conn.WriteError(errWrongArguments)
-		return
+func (s *srv) handleBitop(r red.Request) (interface{}, error) {
+	if len(r.Args) < 3 {
+		return nil, red.ErrWrongArgs
 	}
-	op := strings.ToLower(string(args[1]))
+	op := strings.ToLower(r.Args[0])
 	switch op {
 	default:
-		conn.WriteError(errWrongArguments)
-		return
+		return nil, red.ErrWrongArgs
 	case "and", "or", "xor":
-		if len(args) < 5 {
-			conn.WriteError(errWrongArguments)
-			return
+		if len(r.Args) < 4 {
+			return nil, red.ErrWrongArgs
 		}
 	case "not":
-		conn.WriteError("ERR bitop not is not currently unsupported")
-		return
+		return nil, errors.New("bitop NOT is not supported")
 	}
-	dst := string(args[2])
-	sources := make([]string, len(args[3:]))
-	for i, src := range args[3:] {
-		sources[i] = string(src)
-	}
+	dst := r.Args[1]
+	sources := r.Args[2:]
 	var out int64
 	switch op {
 	case "and":
@@ -322,88 +271,49 @@ func (s *srv) handleBitop(conn redcon.Conn, args [][]byte) {
 	case "xor":
 		out = s.bitopXor(dst, sources)
 	}
-	conn.WriteInt64(out)
+	return out, nil
 }
 
-func (s *srv) handleBitcount(conn redcon.Conn, args [][]byte) {
-	if len(args) != 2 {
-		conn.WriteError(errWrongArguments)
-		return
+func (s *srv) handleBitcount(r red.Request) (interface{}, error) {
+	if len(r.Args) != 1 {
+		return nil, red.ErrWrongArgs
 	}
-	conn.WriteInt(s.cardinality(string(args[1])))
+	return int64(s.cardinality(r.Args[0])), nil
 }
 
-func (s *srv) handleGetbit(conn redcon.Conn, args [][]byte) {
-	if len(args) != 3 {
-		conn.WriteError(errWrongArguments)
-		return
+func (s *srv) handleGetbit(r red.Request) (interface{}, error) {
+	if len(r.Args) != 2 {
+		return nil, red.ErrWrongArgs
 	}
-	if len(args[1]) == 0 {
-		conn.WriteError(errBadKeyName)
-		return
-	}
-	offset, err := strconv.ParseUint(string(args[2]), 10, 32)
+	offset, err := strconv.ParseUint(r.Args[1], 10, 32)
 	if err != nil {
-		conn.WriteError("ERR bit offset is not an integer or out of range")
-		return
+		return nil, errors.New("bit offset is not an integer or out of range")
 	}
-	switch {
-	case s.contains(string(args[1]), uint32(offset)):
-		conn.WriteInt(1)
-	default:
-		conn.WriteInt(0)
-	}
+	return s.contains(r.Args[0], uint32(offset)), nil
 }
 
-func (s *srv) handleSetbit(conn redcon.Conn, args [][]byte) {
-	if len(args) != 4 || len(args[3]) == 0 {
-		conn.WriteError(errWrongArguments)
-		return
+func (s *srv) handleSetbit(r red.Request) (interface{}, error) {
+	if len(r.Args) != 3 {
+		return nil, red.ErrWrongArgs
 	}
-	if len(args[1]) == 0 {
-		conn.WriteError(errBadKeyName)
-		return
-	}
-	offset, err := strconv.ParseUint(string(args[2]), 10, 32)
+	offset, err := strconv.ParseUint(r.Args[1], 10, 32)
 	if err != nil {
-		conn.WriteError("ERR bit offset is not an integer or out of range")
-		return
+		return nil, errors.New("bit offset is not an integer or out of range")
 	}
-	switch args[3][0] {
-	case '0':
-		switch {
-		case s.clearBit(string(args[1]), uint32(offset)):
-			conn.WriteInt(1)
-		default:
-			conn.WriteInt(0)
-		}
-	case '1':
-		switch {
-		case s.setBit(string(args[1]), uint32(offset)):
-			conn.WriteInt(0)
-		default:
-			conn.WriteInt(1)
-		}
-	default:
-		conn.WriteError(errWrongArguments)
-		return
+	switch r.Args[2] {
+	case "0":
+		return s.clearBit(r.Args[0], uint32(offset)), nil
+	case "1":
+		return !s.setBit(r.Args[0], uint32(offset)), nil
 	}
+	return nil, red.ErrWrongArgs
 }
 
-func (s *srv) handleKeys(conn redcon.Conn, args [][]byte) {
-	if len(args) != 2 {
-		conn.WriteError(errWrongArguments)
-		return
+func (s *srv) handleKeys(r red.Request) (interface{}, error) {
+	if len(r.Args) != 1 {
+		return nil, red.ErrWrongArgs
 	}
-	keys, err := s.keys(string(args[1]))
-	if err != nil {
-		conn.WriteError(fmt.Sprintf("ERR %v", err))
-		return
-	}
-	conn.WriteArray(len(keys))
-	for _, k := range keys {
-		conn.WriteBulkString(k)
-	}
+	return s.keys(r.Args[0])
 }
 
 func (s *srv) setBit(key string, offset uint32) bool {
