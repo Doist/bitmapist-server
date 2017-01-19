@@ -398,7 +398,18 @@ func (s *srv) bitopAnd(key string, sources []string) int64 {
 	for _, k := range sources {
 		if bm, ok := s.bitmaps[k]; ok {
 			src = append(src, bm)
+			continue
 		}
+		if len(src) > 0 {
+			// mix of found and missing keys, result would be empty
+			// (but set) bitmap
+			s.bitmaps[key] = roaring.NewBitmap()
+			return 0
+		}
+	}
+	if len(src) == 0 {
+		delete(s.bitmaps, key)
+		return 0
 	}
 	s.bitmaps[key] = roaring.FastAnd(src...)
 	return int64(s.bitmaps[key].GetCardinality())
@@ -413,6 +424,10 @@ func (s *srv) bitopOr(key string, sources []string) int64 {
 			src = append(src, bm)
 		}
 	}
+	if len(src) == 0 {
+		delete(s.bitmaps, key)
+		return 0
+	}
 	s.bitmaps[key] = roaring.FastOr(src...)
 	return int64(s.bitmaps[key].GetCardinality())
 }
@@ -421,10 +436,18 @@ func (s *srv) bitopXor(key string, sources []string) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var src []*roaring.Bitmap
+	var found bool
 	for _, k := range sources {
 		if bm, ok := s.bitmaps[k]; ok {
 			src = append(src, bm)
+			found = true
+			continue
 		}
+		src = append(src, roaring.NewBitmap())
+	}
+	if !found {
+		delete(s.bitmaps, key)
+		return 0
 	}
 	s.bitmaps[key] = roaring.HeapXor(src...)
 	return int64(s.bitmaps[key].GetCardinality())
