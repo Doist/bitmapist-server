@@ -210,7 +210,7 @@ func (s *srv) handleSlurp(req red.Request) (interface{}, error) {
 		}
 		s.log.Println("import from redis completed in", time.Since(begin))
 	}()
-	return resp.OK{}, nil
+	return resp.OK, nil
 }
 
 func (s *srv) handleGet(req red.Request) (interface{}, error) {
@@ -228,7 +228,7 @@ func (s *srv) handleBgsave(r red.Request) (interface{}, error) {
 		return nil, errors.New("no save file configured")
 	}
 	s.persist()
-	return resp.OK{}, nil
+	return resp.OK, nil
 }
 
 func (s *srv) handleDel(r red.Request) (interface{}, error) {
