@@ -220,7 +220,7 @@ func (s *srv) handleGet(req red.Request) (interface{}, error) {
 	if len(req.Args) != 1 {
 		return nil, red.ErrWrongArgs
 	}
-	return s.bitmapBytes(req.Args[0]), nil
+	return s.bitmapBytes(req.Args[0])
 }
 
 func (s *srv) handleBgsave(r red.Request) (interface{}, error) {
@@ -494,16 +494,23 @@ func (s *srv) delete(keys ...string) int {
 	return cnt
 }
 
-func (s *srv) bitmapBytes(key string) []byte {
+func (s *srv) bitmapBytes(key string) ([]byte, error) {
 	s.mu.Lock()
 	bm, ok := s.bitmaps[key]
 	if !ok {
 		s.mu.Unlock()
-		return nil
+		return nil, nil
 	}
 	bm = bm.Clone()
 	s.mu.Unlock()
-	var buf []byte
+	if bm.GetCardinality() == 0 {
+		return []byte{}, nil
+	}
+	max, err := bm.Select(uint32(bm.GetCardinality() - 1))
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, int(max/8)+1)
 	var curPos int
 	var cur byte
 	for it := bm.Iterator(); it.HasNext(); {
@@ -513,15 +520,11 @@ func (s *srv) bitmapBytes(key string) []byte {
 			cur |= bit
 			continue
 		}
-		buf = growBuf(buf, curPos)
-		buf = append(buf, revbits(cur))
+		buf[curPos] = revbits(cur)
 		curPos, cur = pos, bit
 	}
-	if len(buf) <= curPos {
-		buf = growBuf(buf, curPos)
-		buf = append(buf, revbits(cur))
-	}
-	return buf
+	buf[curPos] = revbits(cur)
+	return buf, nil
 }
 
 func (s *srv) exists(key string) bool {
@@ -536,23 +539,6 @@ func revbits(b byte) byte {
 	b = (b&0xcc)>>2 | (b&0x33)<<2
 	b = (b&0xaa)>>1 | (b&0x55)<<1
 	return b
-}
-
-func growBuf(buf []byte, upTo int) []byte {
-	if len(buf) >= upTo {
-		return buf
-	}
-	if cap(buf) > upTo {
-		var scratch [4096]byte
-		for s := upTo - len(buf); s > len(scratch); s -= len(scratch) {
-			buf = append(buf, scratch[:]...)
-		}
-		buf = append(buf, scratch[:upTo-len(buf)]...)
-		return buf
-	}
-	dst := make([]byte, upTo, upTo*3/2)
-	copy(dst, buf)
-	return dst
 }
 
 var (
