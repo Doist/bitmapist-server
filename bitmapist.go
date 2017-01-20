@@ -161,12 +161,12 @@ func (s *srv) persist() {
 					s.mu.Unlock()
 					continue
 				}
-				bm = bm.Clone()
-				s.mu.Unlock()
 				buf.Reset()
 				if _, err := bm.WriteTo(buf); err != nil {
+					s.mu.Unlock()
 					return err
 				}
+				s.mu.Unlock()
 				hdr := &tar.Header{
 					Name:    k,
 					Mode:    0644,
