@@ -171,6 +171,8 @@ func (s *srv) persist() {
 					Mode:    0644,
 					Size:    int64(buf.Len()),
 					ModTime: time.Now(),
+					Uname:   "bitmapist",
+					Gname:   "bitmapist",
 				}
 				if err := tw.WriteHeader(hdr); err != nil {
 					return err
