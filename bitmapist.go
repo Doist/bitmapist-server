@@ -143,9 +143,11 @@ func (s *srv) persist() {
 			defer tw.Close()
 
 			s.mu.Lock()
-			keys := make([]string, 0, len(s.bitmaps))
+			keys := make([]string, len(s.bitmaps))
+			var n int
 			for k := range s.bitmaps {
-				keys = append(keys, k)
+				keys[n] = k
+				n++
 			}
 			s.mu.Unlock()
 
