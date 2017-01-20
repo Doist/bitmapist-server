@@ -37,12 +37,10 @@ func main() {
 	s := newSrv(args.File)
 	if args.File != "" {
 		log.Println("loading data from", args.File)
-	}
-	begin := time.Now()
-	if err := s.restore(); err != nil {
-		log.Fatal(err)
-	}
-	if args.File != "" {
+		begin := time.Now()
+		if err := s.restore(); err != nil {
+			log.Fatal(err)
+		}
 		log.Println("state restored in", time.Since(begin))
 	}
 	srv := red.NewServer()
