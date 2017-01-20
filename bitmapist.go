@@ -25,11 +25,13 @@ import (
 
 func main() {
 	args := struct {
-		Addr string `flag:"addr,address to listen"`
-		File string `flag:"dump,path to dump file"`
+		Addr string        `flag:"addr,address to listen"`
+		File string        `flag:"dump,path to dump file"`
+		Save time.Duration `flag:"dump.every,period to automatically save state"`
 	}{
 		Addr: "localhost:6379",
 		File: "dump.tar.sz",
+		Save: 10 * time.Minute,
 	}
 	autoflags.Define(&args)
 	flag.Parse()
@@ -42,6 +44,7 @@ func main() {
 			log.Fatal(err)
 		}
 		log.Println("state restored in", time.Since(begin))
+		go runEvery(args.Save, s.persist)
 	}
 	srv := red.NewServer()
 	srv.WithLogger(log.New(os.Stderr, "", log.LstdFlags))
@@ -590,5 +593,17 @@ func handleSelect(r red.Request) (interface{}, error) {
 		return resp.OK, nil
 	default:
 		return nil, errors.New("invalid DB index")
+	}
+}
+
+func runEvery(d time.Duration, f func()) {
+	if d <= 0 {
+		return
+	}
+	if d < time.Minute {
+		d = time.Minute
+	}
+	for range time.Tick(d) {
+		f()
 	}
 }
