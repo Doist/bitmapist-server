@@ -31,7 +31,7 @@ func main() {
 		Save time.Duration `flag:"dump.every,period to automatically save state"`
 	}{
 		Addr: "localhost:6379",
-		File: "dump.tar.sz",
+		File: "bitmapist-dump.tar.sz",
 		Save: 10 * time.Minute,
 	}
 	autoflags.Define(&args)
