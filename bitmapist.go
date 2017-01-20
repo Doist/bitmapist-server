@@ -1,3 +1,4 @@
+// Command bitmapist implements standalone bitmapist-compatible server
 package main
 
 import (
