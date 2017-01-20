@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -553,38 +554,67 @@ func (s *srv) redisImport(addr string) error {
 		return err
 	}
 	defer client.Close()
-	mr, err := client.Cmd("KEYS", "*").Array()
-	if err != nil {
-		return err
-	}
 	var vals []uint32
-	for _, r := range mr {
-		key, err := r.Str()
+	var done bool
+	cursor := "0"
+	for !done {
+		a, err := client.Cmd("SCAN", cursor, "count", "10000").Array()
 		if err != nil {
-			continue
+			return err
 		}
-		data, err := client.Cmd("GET", key).Bytes()
+		if len(a) != 2 {
+			return fmt.Errorf("bad response array length: %d", len(a))
+		}
+		cursor, err = a[0].Str()
 		if err != nil {
-			continue
+			return err
 		}
-		vals = vals[:0]
-		for i, b := range data {
-			if b == 0 {
+		if cursor == "0" {
+			done = true
+		}
+		keys, err := a[1].List()
+		if err != nil {
+			return err
+		}
+		for _, key := range keys {
+			if key == "" {
 				continue
 			}
-			for j := byte(0); j <= 7; j++ {
-				if b&(1<<(7-j)) != 0 {
-					vals = append(vals, uint32(i*8)+uint32(j))
+			resp := client.Cmd("GET", key)
+			if resp.Err != nil {
+				if resp.IsType(redis.AppErr) {
+					s.log.Printf("skip load of key %q: %v", key, resp.Err)
+					continue
+				}
+				return resp.Err
+			}
+			if !resp.IsType(redis.BulkStr) {
+				s.log.Printf("skip load of key %q: not a string", key)
+				continue
+			}
+			data, err := resp.Bytes()
+			if err != nil {
+				return err
+			}
+			vals = vals[:0]
+			for i, b := range data {
+				if b == 0 {
+					continue
+				}
+				for j := byte(0); j <= 7; j++ {
+					if b&(1<<(7-j)) != 0 {
+						vals = append(vals, uint32(i*8)+uint32(j))
+					}
 				}
 			}
+			if len(vals) == 0 {
+				continue
+			}
+			bm := roaring.BitmapOf(vals...)
+			s.mu.Lock()
+			s.bitmaps[key] = bm
+			s.mu.Unlock()
 		}
-		if len(vals) == 0 {
-			continue
-		}
-		bm := roaring.BitmapOf(vals...)
-		s.mu.Lock()
-		s.bitmaps[key] = bm
-		s.mu.Unlock()
 	}
 	return nil
 }
