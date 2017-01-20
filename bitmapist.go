@@ -541,11 +541,6 @@ func revbits(b byte) byte {
 	return b
 }
 
-var (
-	errWrongArguments = "ERR wrong command arguments"
-	errBadKeyName     = "ERR bad key name"
-)
-
 func (s *srv) redisImport(addr string) error {
 	client, err := redis.Dial("tcp", addr)
 	if err != nil {
