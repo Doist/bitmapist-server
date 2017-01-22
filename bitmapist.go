@@ -153,7 +153,7 @@ func (s *srv) persist() {
 			s.mu.Unlock()
 
 			begin := time.Now()
-			buf := new(bytes.Buffer)
+			buf := bytes.NewBuffer(make([]byte, 0, 1<<20))
 			for _, k := range keys {
 				s.mu.Lock()
 				bm, ok := s.bitmaps[k]
