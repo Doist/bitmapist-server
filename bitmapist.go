@@ -2,13 +2,10 @@
 package main
 
 import (
-	"archive/tar"
 	"bytes"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -21,7 +18,7 @@ import (
 	"github.com/artyom/autoflags"
 	"github.com/artyom/red"
 	"github.com/artyom/resp"
-	"github.com/golang/snappy"
+	"github.com/boltdb/bolt"
 	"github.com/mediocregopher/radix.v2/redis"
 )
 
@@ -32,22 +29,21 @@ func main() {
 		Save time.Duration `flag:"dump.every,period to automatically save state"`
 	}{
 		Addr: "localhost:6379",
-		File: "bitmapist-dump.tar.sz",
-		Save: 10 * time.Minute,
+		File: "bitmapist.db",
+		Save: 3 * time.Minute,
 	}
 	autoflags.Define(&args)
 	flag.Parse()
 
-	s := newSrv(args.File)
-	if args.File != "" {
-		log.Println("loading data from", args.File)
-		begin := time.Now()
-		if err := s.restore(); err != nil {
-			log.Fatal(err)
-		}
-		log.Println("state restored in", time.Since(begin))
-		go runEvery(args.Save, s.persist)
+	log.Println("loading data from", args.File)
+	begin := time.Now()
+	s, err := newSrv(args.File)
+	if err != nil {
+		log.Fatal(err)
 	}
+	log.Println("loaded in", time.Since(begin))
+	go runEvery(args.Save, s.persist)
+
 	srv := red.NewServer()
 	srv.WithLogger(log.New(os.Stderr, "", log.LstdFlags))
 	srv.Handle("keys", s.handleKeys)
@@ -61,149 +57,166 @@ func main() {
 	srv.Handle("bgsave", s.handleBgsave)
 	srv.Handle("slurp", s.handleSlurp)
 	srv.Handle("scan", s.handleScan)
+	srv.Handle("info", s.handleInfo)
 	srv.Handle("select", handleSelect)
 	log.Fatal(srv.ListenAndServe(args.Addr))
 }
 
-func newSrv(saveFile string) *srv {
-	return &srv{
-		saveFile: saveFile,
-		log:      log.New(os.Stderr, "", log.LstdFlags),
-		bitmaps:  make(map[string]*roaring.Bitmap),
+func newSrv(dbFile string) (*srv, error) {
+	db, err := bolt.Open(dbFile, 0644, &bolt.Options{Timeout: time.Second})
+	if err != nil {
+		return nil, err
 	}
+	s := &srv{
+		db:    db,
+		log:   log.New(os.Stderr, "", log.LstdFlags),
+		keys:  make(map[string]struct{}),
+		cache: make(map[string]cacheItem),
+	}
+	err = s.db.View(func(tx *bolt.Tx) error {
+		bkt := tx.Bucket(bucketName)
+		if bkt == nil {
+			return nil
+		}
+		fn := func(k, v []byte) error { s.keys[string(k)] = struct{}{}; return nil }
+		return bkt.ForEach(fn)
+	})
+	if err != nil {
+		s.db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+type cacheItem struct {
+	b     *roaring.Bitmap
+	aTime int64 // unix timestamp of last access
+	dirty bool  // true if has unsaved modifications
 }
 
 type srv struct {
-	saveFile string
-	log      *log.Logger
+	db  *bolt.DB
+	log *log.Logger
 
-	mu      sync.Mutex
-	bitmaps map[string]*roaring.Bitmap
-	saving  bool
+	mu    sync.Mutex
+	keys  map[string]struct{}  // all known keys
+	cache map[string]cacheItem // hot items
 }
 
-func (s *srv) restore() error {
-	if s.saveFile == "" {
-		return nil
+var bucketName = []byte("bitmapist")
+
+func (s *srv) exists(key string) bool {
+	s.mu.Lock()
+	s.mu.Unlock()
+	_, ok := s.keys[key]
+	return ok
+}
+
+func (s *srv) putBitmap(withLock bool, key string, bm *roaring.Bitmap) {
+	if withLock {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 	}
-	f, err := os.Open(s.saveFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+	v := cacheItem{
+		b:     bm,
+		aTime: time.Now().Unix(),
+		dirty: true,
 	}
-	defer f.Close()
-	tr := tar.NewReader(snappy.NewReader(f))
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
+	s.keys[key] = struct{}{}
+	s.cache[key] = v
+}
+
+func (s *srv) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, error) {
+	if _, ok := s.keys[key]; !ok {
+		if !create {
+			return nil, nil
 		}
-		if err != nil {
-			return err
+		s.keys[key] = struct{}{}
+		s.cache[key] = cacheItem{
+			b:     roaring.NewBitmap(),
+			aTime: time.Now().Unix(),
+			dirty: true,
+		}
+		return s.cache[key].b, nil
+	}
+	if v, ok := s.cache[key]; ok {
+		v.aTime = time.Now().Unix()
+		if !v.dirty && setDirty {
+			v.dirty = true
+		}
+		s.cache[key] = v
+		return v.b, nil
+	}
+	v := cacheItem{
+		aTime: time.Now().Unix(),
+		dirty: setDirty,
+	}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bkt := tx.Bucket(bucketName)
+		if bkt == nil {
+			return errors.New("bucket not found")
 		}
 		bm := roaring.NewBitmap()
-		if _, err := bm.ReadFrom(tr); err != nil {
+		if err := bm.UnmarshalBinary(bkt.Get([]byte(key))); err != nil {
 			return err
 		}
-		s.mu.Lock()
-		s.bitmaps[hdr.Name] = bm
-		s.mu.Unlock()
+		v.b = bm
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	s.cache[key] = v
+	return v.b, nil
 }
 
-func (s *srv) persist() {
-	if s.saveFile == "" {
-		return
-	}
+func (s *srv) persist() error {
+	now := time.Now().Unix()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.saving {
-		return
+	dirty := make([]string, 0, len(s.cache))
+	for k, v := range s.cache {
+		if !v.dirty {
+			if v.aTime < now-300 {
+				delete(s.cache, k)
+			}
+			continue
+		}
+		dirty = append(dirty, k)
 	}
-	s.saving = true
-	go func() {
-		err := func() error {
-			s.log.Println("saving state...")
-			defer func() {
-				s.mu.Lock()
-				s.saving = false
-				s.mu.Unlock()
-			}()
-			tf, err := ioutil.TempFile(filepath.Dir(s.saveFile), "bitmapist-temp-")
+	s.mu.Unlock()
+	for _, k := range dirty {
+		s.mu.Lock()
+		v, ok := s.cache[k]
+		if !ok {
+			s.mu.Unlock()
+			continue
+		}
+		data, err := v.b.ToBytes()
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		v.dirty = false
+		s.cache[k] = v
+		s.mu.Unlock()
+		err = s.db.Update(func(tx *bolt.Tx) error {
+			bkt, err := tx.CreateBucketIfNotExists(bucketName)
 			if err != nil {
 				return err
 			}
-			defer tf.Close()
-			defer os.Remove(tf.Name())
-			sw := snappy.NewBufferedWriter(tf)
-			defer sw.Close()
-			tw := tar.NewWriter(sw)
-			defer tw.Close()
-
+			return bkt.Put([]byte(k), data)
+		})
+		if err != nil {
 			s.mu.Lock()
-			keys := make([]string, len(s.bitmaps))
-			var n int
-			for k := range s.bitmaps {
-				keys[n] = k
-				n++
+			if v, ok := s.cache[k]; ok {
+				v.dirty = true
+				s.cache[k] = v
 			}
 			s.mu.Unlock()
-
-			begin := time.Now()
-			buf := bytes.NewBuffer(make([]byte, 0, 1<<20))
-			for _, k := range keys {
-				s.mu.Lock()
-				bm, ok := s.bitmaps[k]
-				if !ok {
-					s.mu.Unlock()
-					continue
-				}
-				buf.Reset()
-				if _, err := bm.WriteTo(buf); err != nil {
-					s.mu.Unlock()
-					return err
-				}
-				s.mu.Unlock()
-				hdr := &tar.Header{
-					Name:    k,
-					Mode:    0644,
-					Size:    int64(buf.Len()),
-					ModTime: time.Now(),
-					Uname:   "bitmapist",
-					Gname:   "bitmapist",
-				}
-				if err := tw.WriteHeader(hdr); err != nil {
-					return err
-				}
-				if _, err := buf.WriteTo(tw); err != nil {
-					return err
-				}
-			}
-			if err := tw.Close(); err != nil {
-				return err
-			}
-			if err := sw.Close(); err != nil {
-				return err
-			}
-			if err := tf.Close(); err != nil {
-				return err
-			}
-			if err := os.Chmod(tf.Name(), 0644); err != nil {
-				return err
-			}
-			if err := os.Rename(tf.Name(), s.saveFile); err != nil {
-				return err
-			}
-			s.log.Printf("saved %d bitmaps in %v", len(keys), time.Since(begin))
-			return nil
-		}()
-		if err != nil {
-			s.log.Println("error saving state:", err)
+			return err
 		}
-	}()
+	}
+	return nil
 }
 
 func (s *srv) handleSlurp(req red.Request) (interface{}, error) {
@@ -234,10 +247,11 @@ func (s *srv) handleBgsave(r red.Request) (interface{}, error) {
 	if len(r.Args) != 0 {
 		return nil, red.ErrWrongArgs
 	}
-	if s.saveFile == "" {
-		return nil, errors.New("no save file configured")
-	}
-	s.persist()
+	go func() {
+		if err := s.persist(); err != nil {
+			s.log.Println("state save error:", err)
+		}
+	}()
 	return resp.OK, nil
 }
 
@@ -245,7 +259,7 @@ func (s *srv) handleDel(r red.Request) (interface{}, error) {
 	if len(r.Args) < 1 {
 		return nil, red.ErrWrongArgs
 	}
-	return int64(s.delete(r.Args...)), nil
+	return int64(s.delete(true, r.Args...)), nil
 }
 
 func (s *srv) handleExists(r red.Request) (interface{}, error) {
@@ -275,23 +289,22 @@ func (s *srv) handleBitop(r red.Request) (interface{}, error) {
 	}
 	dst := r.Args[1]
 	sources := r.Args[2:]
-	var out int64
 	switch op {
 	case "and":
-		out = s.bitopAnd(dst, sources)
+		return s.bitopAnd(dst, sources)
 	case "or":
-		out = s.bitopOr(dst, sources)
+		return s.bitopOr(dst, sources)
 	case "xor":
-		out = s.bitopXor(dst, sources)
+		return s.bitopXor(dst, sources)
 	}
-	return out, nil
+	return 0, errors.New("unhandled operation")
 }
 
 func (s *srv) handleBitcount(r red.Request) (interface{}, error) {
 	if len(r.Args) != 1 {
 		return nil, red.ErrWrongArgs
 	}
-	return int64(s.cardinality(r.Args[0])), nil
+	return s.cardinality(r.Args[0])
 }
 
 func (s *srv) handleGetbit(r red.Request) (interface{}, error) {
@@ -302,7 +315,7 @@ func (s *srv) handleGetbit(r red.Request) (interface{}, error) {
 	if err != nil {
 		return nil, errors.New("bit offset is not an integer or out of range")
 	}
-	return s.contains(r.Args[0], uint32(offset)), nil
+	return s.contains(r.Args[0], uint32(offset))
 }
 
 func (s *srv) handleSetbit(r red.Request) (interface{}, error) {
@@ -315,9 +328,10 @@ func (s *srv) handleSetbit(r red.Request) (interface{}, error) {
 	}
 	switch r.Args[2] {
 	case "0":
-		return s.clearBit(r.Args[0], uint32(offset)), nil
+		return s.clearBit(r.Args[0], uint32(offset))
 	case "1":
-		return !s.setBit(r.Args[0], uint32(offset)), nil
+		ok, err := s.setBit(r.Args[0], uint32(offset))
+		return !ok, err
 	}
 	return nil, red.ErrWrongArgs
 }
@@ -326,7 +340,24 @@ func (s *srv) handleKeys(r red.Request) (interface{}, error) {
 	if len(r.Args) != 1 {
 		return nil, red.ErrWrongArgs
 	}
-	return s.keys(r.Args[0])
+	return s.matchingKeys(r.Args[0])
+}
+
+func (s *srv) handleInfo(r red.Request) (interface{}, error) {
+	if len(r.Args) != 1 {
+		return nil, red.ErrWrongArgs
+	}
+	switch strings.ToLower(r.Args[0]) {
+	case "keys":
+		buf := new(bytes.Buffer)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		fmt.Fprintf(buf, "keys_total:%d\n", len(s.keys))
+		fmt.Fprintf(buf, "keys_cached:%d\n", len(s.cache))
+		return buf.Bytes(), nil
+	default:
+		return nil, red.ErrWrongArgs
+	}
 }
 
 func (s *srv) handleScan(r red.Request) (interface{}, error) {
@@ -336,51 +367,59 @@ func (s *srv) handleScan(r red.Request) (interface{}, error) {
 		strings.ToLower(r.Args[3]) != "count" {
 		return nil, red.ErrWrongArgs
 	}
-	keys, err := s.keys(r.Args[2])
+	keys, err := s.matchingKeys(r.Args[2])
 	if err != nil {
 		return nil, err
 	}
 	return resp.Array{"0", keys}, nil
 }
 
-func (s *srv) setBit(key string, offset uint32) bool {
+func (s *srv) setBit(key string, offset uint32) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	bm, ok := s.bitmaps[key]
-	if !ok {
-		bm = roaring.New()
-		s.bitmaps[key] = bm
+	bm, err := s.getBitmap(key, true, true)
+	if err != nil {
+		return false, err
 	}
-	return bm.CheckedAdd(offset)
+	if bm == nil {
+		bm = roaring.NewBitmap()
+		s.putBitmap(false, key, bm)
+	}
+	return bm.CheckedAdd(offset), nil
 }
 
-func (s *srv) clearBit(key string, offset uint32) bool {
+func (s *srv) clearBit(key string, offset uint32) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	bm, ok := s.bitmaps[key]
-	if !ok {
-		bm = roaring.New()
-		s.bitmaps[key] = bm
+	bm, err := s.getBitmap(key, true, true)
+	if err != nil {
+		return false, err
 	}
-	return bm.CheckedRemove(offset)
+	if bm == nil {
+		bm = roaring.NewBitmap()
+		s.putBitmap(false, key, bm)
+	}
+	return bm.CheckedRemove(offset), nil
 }
 
-func (s *srv) contains(key string, offset uint32) bool {
+func (s *srv) contains(key string, offset uint32) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	bm, ok := s.bitmaps[key]
-	if !ok {
-		bm = roaring.New()
-		s.bitmaps[key] = bm
+	bm, err := s.getBitmap(key, false, false)
+	if err != nil {
+		return false, err
 	}
-	return bm.Contains(offset)
+	if bm == nil {
+		return false, nil
+	}
+	return bm.Contains(offset), nil
 }
 
-func (s *srv) keys(pattern string) ([]string, error) {
+func (s *srv) matchingKeys(pattern string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	keys := []string{}
-	for k := range s.bitmaps {
+	var keys []string
+	for k := range s.keys {
 		ok, err := filepath.Match(pattern, k)
 		if err != nil {
 			return nil, err
@@ -392,64 +431,81 @@ func (s *srv) keys(pattern string) ([]string, error) {
 	return keys, nil
 }
 
-func (s *srv) cardinality(key string) int {
+func (s *srv) cardinality(key string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	bm, ok := s.bitmaps[key]
-	if !ok {
-		return 0
+	bm, err := s.getBitmap(key, false, false)
+	if err != nil {
+		return 0, err
 	}
-	return int(bm.GetCardinality())
+	if bm == nil {
+		return 0, nil
+	}
+	return int64(bm.GetCardinality()), nil
 }
 
-func (s *srv) bitopAnd(key string, sources []string) int64 {
+func (s *srv) bitopAnd(key string, sources []string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var src []*roaring.Bitmap
 	for _, k := range sources {
-		if bm, ok := s.bitmaps[k]; ok {
+		bm, err := s.getBitmap(k, false, false)
+		if err != nil {
+			return 0, err
+		}
+		if bm != nil {
 			src = append(src, bm)
 			continue
 		}
 		if len(src) > 0 {
 			// mix of found and missing keys, result would be empty
 			// (but set) bitmap
-			s.bitmaps[key] = roaring.NewBitmap()
-			return 0
+			s.putBitmap(false, key, roaring.NewBitmap())
+			return 0, nil
 		}
 	}
 	if len(src) == 0 {
-		delete(s.bitmaps, key)
-		return 0
+		s.delete(false, key)
+		return 0, nil
 	}
-	s.bitmaps[key] = roaring.FastAnd(src...)
-	return int64(s.bitmaps[key].GetCardinality())
+	xbm := roaring.FastAnd(src...)
+	s.putBitmap(false, key, xbm)
+	return int64(xbm.GetCardinality()), nil
 }
 
-func (s *srv) bitopOr(key string, sources []string) int64 {
+func (s *srv) bitopOr(key string, sources []string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var src []*roaring.Bitmap
 	for _, k := range sources {
-		if bm, ok := s.bitmaps[k]; ok {
+		bm, err := s.getBitmap(k, false, false)
+		if err != nil {
+			return 0, err
+		}
+		if bm != nil {
 			src = append(src, bm)
 		}
 	}
 	if len(src) == 0 {
-		delete(s.bitmaps, key)
-		return 0
+		s.delete(false, key)
+		return 0, nil
 	}
-	s.bitmaps[key] = roaring.FastOr(src...)
-	return int64(s.bitmaps[key].GetCardinality())
+	xbm := roaring.FastOr(src...)
+	s.putBitmap(false, key, xbm)
+	return int64(xbm.GetCardinality()), nil
 }
 
-func (s *srv) bitopXor(key string, sources []string) int64 {
+func (s *srv) bitopXor(key string, sources []string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var src []*roaring.Bitmap
 	var found bool
 	for _, k := range sources {
-		if bm, ok := s.bitmaps[k]; ok {
+		bm, err := s.getBitmap(k, false, false)
+		if err != nil {
+			return 0, err
+		}
+		if bm != nil {
 			src = append(src, bm)
 			found = true
 			continue
@@ -457,19 +513,23 @@ func (s *srv) bitopXor(key string, sources []string) int64 {
 		src = append(src, roaring.NewBitmap())
 	}
 	if !found {
-		delete(s.bitmaps, key)
-		return 0
+		s.delete(false, key)
+		return 0, nil
 	}
-	s.bitmaps[key] = roaring.HeapXor(src...)
-	return int64(s.bitmaps[key].GetCardinality())
+	xbm := roaring.HeapXor(src...)
+	s.putBitmap(false, key, xbm)
+	return int64(xbm.GetCardinality()), nil
 }
 
 func (s *srv) bitopNot(dst, src string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b1, ok := s.bitmaps[src]
-	if !ok {
-		delete(s.bitmaps, dst)
+	b1, err := s.getBitmap(src, false, false)
+	if err != nil {
+		return 0, err
+	}
+	if b1 == nil {
+		s.delete(false, dst)
 		return 0, nil
 	}
 	max, err := b1.Select(uint32(b1.GetCardinality() - 1))
@@ -484,27 +544,52 @@ func (s *srv) bitopNot(dst, src string) (int64, error) {
 		upper += (8 - x)
 	}
 	b2 := roaring.Flip(b1, 0, upper)
-	s.bitmaps[dst] = b2
+	s.putBitmap(false, dst, b2)
 	return int64(b2.GetCardinality()), nil
 }
 
-func (s *srv) delete(keys ...string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *srv) delete(withLock bool, keys ...string) int {
+	if withLock {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+	}
 	var cnt int
 	for _, k := range keys {
-		if _, ok := s.bitmaps[k]; ok {
-			cnt++
+		if _, ok := s.keys[k]; !ok {
+			continue
 		}
-		delete(s.bitmaps, k)
+		cnt++
+		delete(s.keys, k)
+		delete(s.cache, k)
+	}
+	if cnt > 0 {
+		err := s.db.Update(func(tx *bolt.Tx) error {
+			bkt := tx.Bucket(bucketName)
+			if bkt == nil {
+				return nil
+			}
+			for _, k := range keys {
+				if err := bkt.Delete([]byte(k)); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			s.log.Println("error deleting keys:", err)
+		}
 	}
 	return cnt
 }
 
 func (s *srv) bitmapBytes(key string) ([]byte, error) {
 	s.mu.Lock()
-	bm, ok := s.bitmaps[key]
-	if !ok {
+	bm, err := s.getBitmap(key, false, false)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if bm == nil {
 		s.mu.Unlock()
 		return nil, nil
 	}
@@ -532,13 +617,6 @@ func (s *srv) bitmapBytes(key string) ([]byte, error) {
 	}
 	buf[curPos] = revbits(cur)
 	return buf, nil
-}
-
-func (s *srv) exists(key string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.bitmaps[key]
-	return ok
 }
 
 func revbits(b byte) byte {
@@ -610,9 +688,14 @@ func (s *srv) redisImport(addr string) error {
 			if len(vals) == 0 {
 				continue
 			}
-			bm := roaring.BitmapOf(vals...)
+			v := cacheItem{
+				b:     roaring.BitmapOf(vals...),
+				aTime: time.Now().Unix(),
+				dirty: true,
+			}
 			s.mu.Lock()
-			s.bitmaps[key] = bm
+			s.keys[key] = struct{}{}
+			s.cache[key] = v
 			s.mu.Unlock()
 		}
 	}
@@ -631,14 +714,20 @@ func handleSelect(r red.Request) (interface{}, error) {
 	}
 }
 
-func runEvery(d time.Duration, f func()) {
+func runEvery(d time.Duration, f func() error) {
 	if d <= 0 {
 		return
 	}
 	if d < time.Minute {
 		d = time.Minute
 	}
-	for range time.Tick(d) {
-		f()
+	for t := range time.Tick(d) {
+		log.Println("saving state...")
+		if err := f(); err != nil {
+			log.Println("error saving state:", err)
+		} else {
+			log.Println("saved in", time.Since(t))
+		}
+
 	}
 }
