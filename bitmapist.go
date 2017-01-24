@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -25,13 +27,11 @@ import (
 
 func main() {
 	args := struct {
-		Addr string        `flag:"addr,address to listen"`
-		File string        `flag:"db,path to database file"`
-		Save time.Duration `flag:"save,period to automatically save dirty state"`
+		Addr string `flag:"addr,address to listen"`
+		File string `flag:"db,path to database file"`
 	}{
 		Addr: "localhost:6379",
 		File: "bitmapist.db",
-		Save: 3 * time.Minute,
 	}
 	autoflags.Define(&args)
 	flag.Parse()
@@ -43,7 +43,6 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Println("loaded in", time.Since(begin))
-	go runEvery(args.Save, s.persist)
 
 	srv := red.NewServer()
 	srv.WithLogger(log.New(os.Stderr, "", log.LstdFlags))
@@ -60,6 +59,15 @@ func main() {
 	srv.Handle("scan", s.handleScan)
 	srv.Handle("info", s.handleInfo)
 	srv.Handle("select", handleSelect)
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		log.Println(<-sigCh)
+		if err := s.Shutdown(); err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}()
 	log.Fatal(srv.ListenAndServe(args.Addr))
 }
 
@@ -72,7 +80,12 @@ func newSrv(dbFile string) (*srv, error) {
 		db:    db,
 		log:   log.New(os.Stderr, "", log.LstdFlags),
 		keys:  make(map[string]struct{}),
+		rm:    make(map[string]struct{}),
 		cache: make(map[string]cacheItem),
+
+		done:    make(chan struct{}),
+		doneAck: make(chan struct{}),
+		save:    make(chan struct{}),
 	}
 	err = s.db.View(func(tx *bolt.Tx) error {
 		if bkt := tx.Bucket([]byte("aux")); bkt != nil {
@@ -96,7 +109,13 @@ func newSrv(dbFile string) (*srv, error) {
 		s.db.Close()
 		return nil, err
 	}
+	go s.loop()
 	return s, nil
+}
+
+func (s *srv) Shutdown() error {
+	s.once.Do(func() { close(s.done); <-s.doneAck })
+	return s.db.Close()
 }
 
 type cacheItem struct {
@@ -108,6 +127,11 @@ type cacheItem struct {
 type srv struct {
 	db  *bolt.DB
 	log *log.Logger
+
+	once    sync.Once
+	done    chan struct{}
+	doneAck chan struct{}
+	save    chan struct{}
 
 	mu    sync.Mutex
 	keys  map[string]struct{}  // all known keys
@@ -180,6 +204,32 @@ func (s *srv) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, err
 	}
 	s.cache[key] = v
 	return v.b, nil
+}
+
+func (s *srv) loop() {
+	ticker := time.NewTicker(3 * time.Minute)
+	defer ticker.Stop()
+	defer close(s.doneAck)
+	fn := func(text string, f func() error) {
+		s.log.Println(text)
+		begin := time.Now()
+		if err := f(); err != nil {
+			s.log.Println(err)
+			return
+		}
+		s.log.Println("saved in", time.Since(begin))
+	}
+	for {
+		select {
+		case <-ticker.C:
+			fn("periodic saving...", s.persist)
+		case <-s.save:
+			fn("forced saving...", s.persist)
+		case <-s.done:
+			fn("final saving...", s.persist)
+			return
+		}
+	}
 }
 
 func (s *srv) persist() error {
@@ -298,11 +348,10 @@ func (s *srv) handleBgsave(r red.Request) (interface{}, error) {
 	if len(r.Args) != 0 {
 		return nil, red.ErrWrongArgs
 	}
-	go func() {
-		if err := s.persist(); err != nil {
-			s.log.Println("state save error:", err)
-		}
-	}()
+	select {
+	case s.save <- struct{}{}:
+	default:
+	}
 	return resp.OK, nil
 }
 
@@ -746,23 +795,5 @@ func handleSelect(r red.Request) (interface{}, error) {
 		return resp.OK, nil
 	default:
 		return nil, errors.New("invalid DB index")
-	}
-}
-
-func runEvery(d time.Duration, f func() error) {
-	if d <= 0 {
-		return
-	}
-	if d < time.Minute {
-		d = time.Minute
-	}
-	for t := range time.Tick(d) {
-		log.Println("saving state...")
-		if err := f(); err != nil {
-			log.Println("error saving state:", err)
-		} else {
-			log.Println("saved in", time.Since(t))
-		}
-
 	}
 }
