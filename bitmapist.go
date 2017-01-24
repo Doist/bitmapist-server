@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/gob"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,8 +26,8 @@ import (
 func main() {
 	args := struct {
 		Addr string        `flag:"addr,address to listen"`
-		File string        `flag:"dump,path to dump file"`
-		Save time.Duration `flag:"dump.every,period to automatically save state"`
+		File string        `flag:"db,path to database file"`
+		Save time.Duration `flag:"save,period to automatically save dirty state"`
 	}{
 		Addr: "localhost:6379",
 		File: "bitmapist.db",
@@ -74,6 +75,16 @@ func newSrv(dbFile string) (*srv, error) {
 		cache: make(map[string]cacheItem),
 	}
 	err = s.db.View(func(tx *bolt.Tx) error {
+		if bkt := tx.Bucket([]byte("aux")); bkt != nil {
+			var keys []string
+			rd := bytes.NewReader(bkt.Get([]byte("keys")))
+			if err := gob.NewDecoder(rd).Decode(&keys); err == nil && len(keys) > 0 {
+				for _, k := range keys {
+					s.keys[k] = struct{}{}
+				}
+				return nil
+			}
+		}
 		bkt := tx.Bucket(bucketName)
 		if bkt == nil {
 			return nil
@@ -100,6 +111,7 @@ type srv struct {
 
 	mu    sync.Mutex
 	keys  map[string]struct{}  // all known keys
+	rm    map[string]struct{}  // removed but not yet purged
 	cache map[string]cacheItem // hot items
 }
 
@@ -183,7 +195,29 @@ func (s *srv) persist() error {
 		}
 		dirty = append(dirty, k)
 	}
+	toPurge := make([]string, 0, len(s.rm))
+	for k := range s.rm {
+		toPurge = append(toPurge, k)
+	}
+	s.rm = make(map[string]struct{})
 	s.mu.Unlock()
+	if len(toPurge) > 0 {
+		err := s.db.Update(func(tx *bolt.Tx) error {
+			bkt, err := tx.CreateBucketIfNotExists(bucketName)
+			if err != nil {
+				return err
+			}
+			for _, k := range toPurge {
+				if err := bkt.Delete([]byte(k)); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
 	for _, k := range dirty {
 		s.mu.Lock()
 		v, ok := s.cache[k]
@@ -216,7 +250,24 @@ func (s *srv) persist() error {
 			return err
 		}
 	}
-	return nil
+	s.mu.Lock()
+	keys := make([]string, 0, len(s.keys))
+	for k := range s.keys {
+		keys = append(keys, k)
+	}
+	s.mu.Unlock()
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(keys); err != nil {
+		return err
+	}
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		bkt, err := tx.CreateBucketIfNotExists([]byte("aux"))
+		if err != nil {
+			return err
+		}
+		return bkt.Put([]byte("keys"), buf.Bytes())
+	})
+	return err
 }
 
 func (s *srv) handleSlurp(req red.Request) (interface{}, error) {
@@ -561,23 +612,7 @@ func (s *srv) delete(withLock bool, keys ...string) int {
 		cnt++
 		delete(s.keys, k)
 		delete(s.cache, k)
-	}
-	if cnt > 0 {
-		err := s.db.Update(func(tx *bolt.Tx) error {
-			bkt := tx.Bucket(bucketName)
-			if bkt == nil {
-				return nil
-			}
-			for _, k := range keys {
-				if err := bkt.Delete([]byte(k)); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			s.log.Println("error deleting keys:", err)
-		}
+		s.rm[k] = struct{}{}
 	}
 	return cnt
 }
