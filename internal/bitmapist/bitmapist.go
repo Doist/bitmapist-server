@@ -1,3 +1,5 @@
+// Package bitmapist implements standalone bitmapist server that can be used
+// instead of Redis for https://github.com/Doist/bitmapist library.
 package bitmapist
 
 import (
@@ -21,6 +23,7 @@ import (
 	"github.com/mediocregopher/radix.v2/redis"
 )
 
+// New returns initialized Server that loads/saves its data in dbFile
 func New(dbFile string) (*Server, error) {
 	db, err := bolt.Open(dbFile, 0644, &bolt.Options{Timeout: time.Second})
 	if err != nil {
@@ -94,7 +97,9 @@ type cacheItem struct {
 	dirty bool  // true if has unsaved modifications
 }
 
-// Server is a bitmapist standalone server
+// Server is a standalone bitmapist server implementation. It's intended to be
+// run on top of github.com/artyom/red.Server which handles redis protocol-level
+// details and networking.
 type Server struct {
 	db  *bolt.DB
 	log *log.Logger
