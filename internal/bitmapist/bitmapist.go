@@ -543,8 +543,16 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 		return 0, nil
 	}
 	xbm := roaring.FastAnd(src...)
+	max, err := xbm.Select(uint32(xbm.GetCardinality() - 1))
+	if err != nil {
+		return 0, err
+	}
 	s.putBitmap(false, key, xbm)
-	return int64(xbm.GetCardinality()), nil
+	sz := max / 8
+	if max%8 > 0 {
+		sz++
+	}
+	return int64(sz), nil
 }
 
 func (s *Server) bitopOr(key string, sources []string) (int64, error) {
@@ -565,8 +573,16 @@ func (s *Server) bitopOr(key string, sources []string) (int64, error) {
 		return 0, nil
 	}
 	xbm := roaring.FastOr(src...)
+	max, err := xbm.Select(uint32(xbm.GetCardinality() - 1))
+	if err != nil {
+		return 0, err
+	}
 	s.putBitmap(false, key, xbm)
-	return int64(xbm.GetCardinality()), nil
+	sz := max / 8
+	if max%8 > 0 {
+		sz++
+	}
+	return int64(sz), nil
 }
 
 func (s *Server) bitopXor(key string, sources []string) (int64, error) {
@@ -591,8 +607,16 @@ func (s *Server) bitopXor(key string, sources []string) (int64, error) {
 		return 0, nil
 	}
 	xbm := roaring.HeapXor(src...)
+	max, err := xbm.Select(uint32(xbm.GetCardinality() - 1))
+	if err != nil {
+		return 0, err
+	}
 	s.putBitmap(false, key, xbm)
-	return int64(xbm.GetCardinality()), nil
+	sz := max / 8
+	if max%8 > 0 {
+		sz++
+	}
+	return int64(sz), nil
 }
 
 func (s *Server) bitopNot(dst, src string) (int64, error) {
@@ -619,7 +643,7 @@ func (s *Server) bitopNot(dst, src string) (int64, error) {
 	}
 	b2 := roaring.Flip(b1, 0, upper)
 	s.putBitmap(false, dst, b2)
-	return int64(b2.GetCardinality()), nil
+	return int64(upper / 8), nil
 }
 
 func (s *Server) delete(withLock bool, keys ...string) int {

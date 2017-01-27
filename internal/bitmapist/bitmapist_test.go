@@ -41,7 +41,7 @@ func TestServer(t *testing.T) {
 	checkResponse(t, "getbit dst 0", int64(0), rd, conn)
 	checkResponse(t, "get dst", "\x01 ", rd, conn)
 
-	checkResponse(t, "bitop xor dst foo bar", int64(1), rd, conn)
+	checkResponse(t, "bitop xor dst foo bar", int64(2), rd, conn)
 	checkResponse(t, "bitcount dst", int64(1), rd, conn)
 	checkResponse(t, "getbit dst 10", int64(1), rd, conn)
 	checkResponse(t, "getbit dst 7", int64(0), rd, conn)
@@ -61,6 +61,13 @@ func TestServer(t *testing.T) {
 	// this differs from redis which returns 2-byte response since it'd
 	// allocate array to fit longest source
 	checkResponse(t, "get dst", "\x01", rd, conn)
+
+	checkResponse(t, "bitop not dst baz", int64(2), rd, conn)
+	checkResponse(t, "bitcount dst", int64(15), rd, conn)
+	checkResponse(t, "getbit dst 8", int64(0), rd, conn)
+	checkResponse(t, "getbit dst 15", int64(1), rd, conn)
+	checkResponse(t, "getbit dst 16", int64(0), rd, conn)
+	checkResponse(t, "get dst", "\xff\x7f", rd, conn)
 }
 
 func checkResponse(t testing.TB, req string, respWanted interface{}, rd resp.BytesReader, wr io.Writer) {
