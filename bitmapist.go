@@ -7,6 +7,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/signal"
@@ -29,6 +31,7 @@ func main() {
 	args := struct {
 		Addr string `flag:"addr,address to listen"`
 		File string `flag:"db,path to database file"`
+		Bak  string `flag:"bak,file to save backup to on SIGUSR1"`
 	}{
 		Addr: "localhost:6379",
 		File: "bitmapist.db",
@@ -68,7 +71,43 @@ func main() {
 		}
 		os.Exit(0)
 	}()
+	if args.Bak != "" && args.Bak != args.File {
+		go func() {
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGUSR1)
+			for range sigCh {
+				log.Printf("backing up database to %q", args.Bak)
+				switch err := doBackup(s, args.Bak); err {
+				case nil:
+					log.Println("backup successfully saved")
+				default:
+					log.Println("error doing backup:", err)
+				}
+			}
+		}()
+	}
 	log.Fatal(srv.ListenAndServe(args.Addr))
+}
+
+// doBackup creates temporary file, calls s.Backup on it and renames temporary
+// file to dst if backup completed successfully.
+func doBackup(s *srv, dst string) error {
+	f, err := ioutil.TempFile(filepath.Dir(dst), "bitmapist-backup-")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	defer os.Remove(f.Name())
+	if err := s.Backup(f); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(f.Name(), 0644); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), dst)
 }
 
 func newSrv(dbFile string) (*srv, error) {
@@ -708,6 +747,16 @@ func revbits(b byte) byte {
 	b = (b&0xcc)>>2 | (b&0x33)<<2
 	b = (b&0xaa)>>1 | (b&0x55)<<1
 	return b
+}
+
+// Backup writes current on-disk saved database to Writer w. It's not safe to
+// copy database file while it's used, so this method can be used to get
+// a consistent copy of database.
+func (s *srv) Backup(w io.Writer) error {
+	return s.db.View(func(tx *bolt.Tx) error {
+		_, err := tx.WriteTo(w)
+		return err
+	})
 }
 
 func (s *srv) redisImport(addr string) error {
