@@ -28,6 +28,7 @@ func main() {
 	}
 	autoflags.Define(&args)
 	flag.Parse()
+	log := log.New(os.Stderr, "", log.LstdFlags)
 
 	log.Println("loading data from", args.File)
 	begin := time.Now()
@@ -38,7 +39,7 @@ func main() {
 	log.Println("loaded in", time.Since(begin))
 
 	srv := red.NewServer()
-	srv.WithLogger(log.New(os.Stderr, "", log.LstdFlags))
+	srv.WithLogger(log)
 	s.Register(srv)
 	go func() {
 		sigCh := make(chan os.Signal, 1)
