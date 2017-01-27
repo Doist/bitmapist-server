@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -31,7 +29,7 @@ func New(dbFile string) (*Server, error) {
 	}
 	s := &Server{
 		db:    db,
-		log:   log.New(os.Stderr, "", log.LstdFlags),
+		log:   noopLogger{},
 		keys:  make(map[string]struct{}),
 		rm:    make(map[string]struct{}),
 		cache: make(map[string]cacheItem),
@@ -102,7 +100,7 @@ type cacheItem struct {
 // details and networking.
 type Server struct {
 	db  *bolt.DB
-	log *log.Logger
+	log Logger
 
 	once    sync.Once
 	done    chan struct{}
@@ -783,3 +781,26 @@ func handleSelect(r red.Request) (interface{}, error) {
 		return nil, errors.New("invalid DB index")
 	}
 }
+
+// Logger is a set of methods used to log information. *log.Logger implements
+// this interface.
+type Logger interface {
+	Print(v ...interface{})
+	Printf(format string, v ...interface{})
+	Println(v ...interface{})
+}
+
+// WithLogger configures server to use provided Logger.
+func (s *Server) WithLogger(l Logger) {
+	if l == nil {
+		s.log = noopLogger{}
+		return
+	}
+	s.log = l
+}
+
+type noopLogger struct{}
+
+func (noopLogger) Print(v ...interface{})                 {}
+func (noopLogger) Printf(format string, v ...interface{}) {}
+func (noopLogger) Println(v ...interface{})               {}

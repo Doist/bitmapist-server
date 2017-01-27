@@ -37,6 +37,7 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Println("loaded in", time.Since(begin))
+	s.WithLogger(log)
 
 	srv := red.NewServer()
 	srv.WithLogger(log)
