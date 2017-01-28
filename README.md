@@ -10,9 +10,15 @@ Memory in use reported by redis (matches RSS of redis-server process): 129.48G.
 
 With the same dataset migrated to standalone bitmapist server under the same load: RSS reported at about 300M.
 
+## Installation
+
+You'd need [Go](https://golang.org/dl/) in order to build bitmapist server. To install bitmapist server:
+
+	go get -u github.com/Doist/bitmapist-server
+
 ## Usage
 
-	Usage of bitmapist:
+	Usage of bitmapist-server:
 	  -addr string
 	    	address to listen (default "localhost:6379")
 	  -bak string
