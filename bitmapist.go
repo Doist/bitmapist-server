@@ -21,6 +21,7 @@ func main() {
 		Addr string `flag:"addr,address to listen"`
 		File string `flag:"db,path to database file"`
 		Bak  string `flag:"bak,file to save backup to on SIGUSR1"`
+		Dbg  bool   `flag:"debug,log incoming commands"`
 	}{
 		Addr: "localhost:6379",
 		File: "bitmapist.db",
@@ -40,6 +41,9 @@ func main() {
 
 	srv := red.NewServer()
 	srv.WithLogger(log)
+	if args.Dbg {
+		srv.WithCommands()
+	}
 	s.Register(srv)
 	go func() {
 		sigCh := make(chan os.Signal, 1)
