@@ -543,7 +543,7 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 		return 0, nil
 	}
 	xbm := roaring.FastAnd(src...)
-	max, err := xbm.Select(uint32(xbm.GetCardinality() - 1))
+	max, err := maxValue(xbm)
 	if err != nil {
 		return 0, err
 	}
@@ -573,7 +573,7 @@ func (s *Server) bitopOr(key string, sources []string) (int64, error) {
 		return 0, nil
 	}
 	xbm := roaring.FastOr(src...)
-	max, err := xbm.Select(uint32(xbm.GetCardinality() - 1))
+	max, err := maxValue(xbm)
 	if err != nil {
 		return 0, err
 	}
@@ -607,7 +607,7 @@ func (s *Server) bitopXor(key string, sources []string) (int64, error) {
 		return 0, nil
 	}
 	xbm := roaring.HeapXor(src...)
-	max, err := xbm.Select(uint32(xbm.GetCardinality() - 1))
+	max, err := maxValue(xbm)
 	if err != nil {
 		return 0, err
 	}
@@ -630,7 +630,7 @@ func (s *Server) bitopNot(dst, src string) (int64, error) {
 		s.delete(false, dst)
 		return 0, nil
 	}
-	max, err := b1.Select(uint32(b1.GetCardinality() - 1))
+	max, err := maxValue(b1)
 	if err != nil {
 		return 0, err
 	}
@@ -680,7 +680,7 @@ func (s *Server) bitmapBytes(key string) ([]byte, error) {
 	if bm.GetCardinality() == 0 {
 		return []byte{}, nil
 	}
-	max, err := bm.Select(uint32(bm.GetCardinality() - 1))
+	max, err := maxValue(bm)
 	if err != nil {
 		return nil, err
 	}
@@ -828,3 +828,11 @@ type noopLogger struct{}
 func (noopLogger) Print(v ...interface{})                 {}
 func (noopLogger) Printf(format string, v ...interface{}) {}
 func (noopLogger) Println(v ...interface{})               {}
+
+func maxValue(b *roaring.Bitmap) (uint32, error) {
+	card := b.GetCardinality()
+	if card == 0 {
+		return 0, nil
+	}
+	return b.Select(uint32(card - 1))
+}
