@@ -16,6 +16,7 @@ import (
 type container interface {
 	clone() container
 	and(container) container
+	andCardinality(container) int
 	iand(container) container // i stands for inplace
 	andNot(container) container
 	iandNot(container) container // i stands for inplace
@@ -38,6 +39,8 @@ type container interface {
 	xor(r container) container
 	getShortIterator() shortIterable
 	contains(i uint16) bool
+	maximum() uint16
+	minimum() uint16
 
 	// equals is now logical equals; it does not require the
 	// same underlying container types, but compares across
@@ -46,6 +49,8 @@ type container interface {
 
 	fillLeastSignificant16bits(array []uint32, i int, mask uint32)
 	or(r container) container
+	orCardinality(r container) int
+	isFull() bool
 	ior(r container) container   // i stands for inplace
 	intersects(r container) bool // whether the two containers intersect
 	lazyOR(r container) container

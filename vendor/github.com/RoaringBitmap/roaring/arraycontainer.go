@@ -29,6 +29,14 @@ func (ac *arrayContainer) getShortIterator() shortIterable {
 	return &shortIterator{ac.content, 0}
 }
 
+func (ac *arrayContainer) minimum() uint16 {
+	return ac.content[0] // assume not empty
+}
+
+func (ac *arrayContainer) maximum() uint16 {
+	return ac.content[len(ac.content)-1] // assume not empty
+}
+
 // unsafe.Sizeof calculates the memory used by the top level of the slice
 // descriptor - not including the size of the memory referenced by the slice.
 // http://golang.org/pkg/unsafe/#Sizeof
@@ -302,7 +310,22 @@ func (ac *arrayContainer) or(a container) container {
 	case *bitmapContainer:
 		return x.orArray(ac)
 	case *runContainer16:
+		if x.isFull() {
+			return x.clone()
+		}
 		return x.orArray(ac)
+	}
+	panic("unsupported container type")
+}
+
+func (ac *arrayContainer) orCardinality(a container) int {
+	switch x := a.(type) {
+	case *arrayContainer:
+		return ac.orArrayCardinality(x)
+	case *bitmapContainer:
+		return x.orArrayCardinality(ac)
+	case *runContainer16:
+		return x.orArrayCardinality(ac)
 	}
 	panic("unsupported container type")
 }
@@ -314,6 +337,9 @@ func (ac *arrayContainer) ior(a container) container {
 	case *bitmapContainer:
 		return ac.iorBitmap(x)
 	case *runContainer16:
+		if x.isFull() {
+			return x.clone()
+		}
 		return ac.iorRun16(x)
 	}
 	panic("unsupported container type")
@@ -350,6 +376,9 @@ func (ac *arrayContainer) lazyIOR(a container) container {
 	case *bitmapContainer:
 		return ac.lazyIorBitmap(x)
 	case *runContainer16:
+		if x.isFull() {
+			return x.clone()
+		}
 		return ac.lazyIorRun16(x)
 
 	}
@@ -378,6 +407,9 @@ func (ac *arrayContainer) lazyOR(a container) container {
 	case *bitmapContainer:
 		return a.lazyOR(ac)
 	case *runContainer16:
+		if x.isFull() {
+			return x.clone()
+		}
 		return x.orArray(ac)
 	}
 	panic("unsupported container type")
@@ -410,6 +442,10 @@ func (ac *arrayContainer) orArray(value2 *arrayContainer) container {
 	nl := union2by2(value1.content, value2.content, answer.content)
 	answer.content = answer.content[:nl] // reslice to match actual used capacity
 	return answer
+}
+
+func (ac *arrayContainer) orArrayCardinality(value2 *arrayContainer) int {
+	return union2by2Cardinality(ac.content, value2.content)
 }
 
 func (ac *arrayContainer) lazyorArray(value2 *arrayContainer) container {
@@ -446,7 +482,22 @@ func (ac *arrayContainer) and(a container) container {
 	case *bitmapContainer:
 		return x.and(ac)
 	case *runContainer16:
+		if x.isFull() {
+			return ac.clone()
+		}
 		return x.andArray(ac)
+	}
+	panic("unsupported container type")
+}
+
+func (ac *arrayContainer) andCardinality(a container) int {
+	switch x := a.(type) {
+	case *arrayContainer:
+		return ac.andArrayCardinality(x)
+	case *bitmapContainer:
+		return x.andCardinality(ac)
+	case *runContainer16:
+		return x.andArrayCardinality(ac)
 	}
 	panic("unsupported container type")
 }
@@ -470,13 +521,15 @@ func (ac *arrayContainer) iand(a container) container {
 	case *bitmapContainer:
 		return ac.iandBitmap(x)
 	case *runContainer16:
+		if x.isFull() {
+			return ac.clone()
+		}
 		return ac.iandRun16(x)
 	}
 	panic("unsupported container type")
 }
 
 func (ac *arrayContainer) iandRun16(rc *runContainer16) container {
-
 	bc1 := ac.toBitmapContainer()
 	bc2 := newBitmapContainerFromRun(rc)
 	bc2.iandBitmap(bc1)
@@ -488,10 +541,10 @@ func (ac *arrayContainer) iandBitmap(bc *bitmapContainer) container {
 	pos := 0
 	c := ac.getCardinality()
 	for k := 0; k < c; k++ {
-		if bc.contains(ac.content[k]) {
-			ac.content[pos] = ac.content[k]
-			pos++
-		}
+		// branchless
+		v := ac.content[k]
+		ac.content[pos] = v
+		pos += int(bc.bitValue(v))
 	}
 	ac.content = ac.content[:pos]
 	return ac
@@ -598,10 +651,8 @@ func (ac *arrayContainer) andNotBitmap(value2 *bitmapContainer) container {
 	answer.content = answer.content[:desiredcapacity]
 	pos := 0
 	for _, v := range ac.content {
-		if !value2.contains(v) {
-			answer.content[pos] = v
-			pos++
-		}
+		answer.content[pos] = v
+		pos += 1 - int(value2.bitValue(v))
 	}
 	answer.content = answer.content[:pos]
 	return answer
@@ -613,10 +664,8 @@ func (ac *arrayContainer) andBitmap(value2 *bitmapContainer) container {
 	answer.content = answer.content[:desiredcapacity]
 	pos := 0
 	for _, v := range ac.content {
-		if value2.contains(v) {
-			answer.content[pos] = v
-			pos++
-		}
+		answer.content[pos] = v
+		pos += int(value2.bitValue(v))
 	}
 	answer.content = answer.content[:pos]
 	return answer
@@ -625,10 +674,8 @@ func (ac *arrayContainer) andBitmap(value2 *bitmapContainer) container {
 func (ac *arrayContainer) iandNotBitmap(value2 *bitmapContainer) container {
 	pos := 0
 	for _, v := range ac.content {
-		if !value2.contains(v) {
-			ac.content[pos] = v
-			pos++
-		}
+		ac.content[pos] = v
+		pos += 1 - int(value2.bitValue(v))
 	}
 	ac.content = ac.content[:pos]
 	return ac
@@ -742,16 +789,12 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+func (ac *arrayContainer) isFull() bool {
+	return false
+}
+
 func (ac *arrayContainer) andArray(value2 *arrayContainer) container {
-
-	// are bitmaps faster? nope
-	/*
-		bc1 := ac.toBitmapContainer()
-		bc2 := value2.toBitmapContainer()
-		bc1.iandBitmap(bc2)
-		return bc1
-	*/
-
 	desiredcapacity := min(ac.getCardinality(), value2.getCardinality())
 	answer := newArrayContainerCapacity(desiredcapacity)
 	length := intersection2by2(
@@ -760,6 +803,12 @@ func (ac *arrayContainer) andArray(value2 *arrayContainer) container {
 		answer.content)
 	answer.content = answer.content[:length]
 	return answer
+}
+
+func (ac *arrayContainer) andArrayCardinality(value2 *arrayContainer) int {
+	return intersection2by2Cardinality(
+		ac.content,
+		value2.content)
 }
 
 func (ac *arrayContainer) intersectsArray(value2 *arrayContainer) bool {

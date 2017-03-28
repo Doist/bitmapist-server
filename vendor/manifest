@@ -5,7 +5,7 @@
 			"importpath": "github.com/RoaringBitmap/roaring",
 			"repository": "https://github.com/RoaringBitmap/roaring",
 			"vcs": "git",
-			"revision": "93a354dbcd9aca687fdba5f264e22f5c8c156db9",
+			"revision": "dd6fd8e4fda2d86845a0342794520f8bd95f76fd",
 			"branch": "master",
 			"notests": true
 		},
