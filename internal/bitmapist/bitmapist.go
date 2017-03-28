@@ -543,10 +543,7 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 		return 0, nil
 	}
 	xbm := roaring.FastAnd(src...)
-	max, err := maxValue(xbm)
-	if err != nil {
-		return 0, err
-	}
+	max := maxValue(xbm)
 	s.putBitmap(false, key, xbm)
 	sz := max / 8
 	if max%8 > 0 {
@@ -573,10 +570,7 @@ func (s *Server) bitopOr(key string, sources []string) (int64, error) {
 		return 0, nil
 	}
 	xbm := roaring.FastOr(src...)
-	max, err := maxValue(xbm)
-	if err != nil {
-		return 0, err
-	}
+	max := maxValue(xbm)
 	s.putBitmap(false, key, xbm)
 	sz := max / 8
 	if max%8 > 0 {
@@ -607,10 +601,7 @@ func (s *Server) bitopXor(key string, sources []string) (int64, error) {
 		return 0, nil
 	}
 	xbm := roaring.HeapXor(src...)
-	max, err := maxValue(xbm)
-	if err != nil {
-		return 0, err
-	}
+	max := maxValue(xbm)
 	s.putBitmap(false, key, xbm)
 	sz := max / 8
 	if max%8 > 0 {
@@ -630,10 +621,7 @@ func (s *Server) bitopNot(dst, src string) (int64, error) {
 		s.delete(false, dst)
 		return 0, nil
 	}
-	max, err := maxValue(b1)
-	if err != nil {
-		return 0, err
-	}
+	max := maxValue(b1)
 	upper := uint64(max + 1) // +1 because [rangeStart,rangeEnd)
 	// when redis does BITOP NOT, it operates on byte boundary, so resulting
 	// bitmap may have last byte padded with ones - mimick this by moving
@@ -680,10 +668,7 @@ func (s *Server) bitmapBytes(key string) ([]byte, error) {
 	if bm.GetCardinality() == 0 {
 		return []byte{}, nil
 	}
-	max, err := maxValue(bm)
-	if err != nil {
-		return nil, err
-	}
+	max := maxValue(bm)
 	buf := make([]byte, int(max/8)+1)
 	var curPos int
 	var cur byte
@@ -829,10 +814,9 @@ func (noopLogger) Print(v ...interface{})                 {}
 func (noopLogger) Printf(format string, v ...interface{}) {}
 func (noopLogger) Println(v ...interface{})               {}
 
-func maxValue(b *roaring.Bitmap) (uint32, error) {
-	card := b.GetCardinality()
-	if card == 0 {
-		return 0, nil
+func maxValue(b *roaring.Bitmap) uint32 {
+	if b.IsEmpty() {
+		return 0
 	}
-	return b.Select(uint32(card - 1))
+	return b.Maximum()
 }
