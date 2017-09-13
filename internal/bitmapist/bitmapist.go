@@ -191,7 +191,7 @@ func (s *Server) loop() {
 			s.log.Println(err)
 			return
 		}
-		s.log.Println("saved in", time.Since(begin))
+		s.log.Println("saved in", time.Since(begin).Round(time.Millisecond))
 	}
 	for {
 		select {
