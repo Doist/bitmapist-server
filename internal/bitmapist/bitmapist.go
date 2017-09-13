@@ -117,7 +117,7 @@ var bucketName = []byte("bitmapist")
 
 func (s *Server) exists(key string) bool {
 	s.mu.Lock()
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 	_, ok := s.keys[key]
 	return ok
 }
