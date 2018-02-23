@@ -4,10 +4,44 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/willf/bitset"
 	"log"
+	"math"
 	"math/rand"
 	"strconv"
 	"testing"
+	"unsafe"
 )
+
+func TestRoaringRangeEnd(t *testing.T) {
+	r := New()
+	r.Add(MaxUint32)
+	if 1 != r.GetCardinality() {
+		t.FailNow()
+	}
+	r.RemoveRange(0, MaxUint32)
+	if 1 != r.GetCardinality() {
+		t.FailNow()
+	}
+	r.RemoveRange(0, math.MaxUint64)
+	if 0 != r.GetCardinality() {
+		t.FailNow()
+	}
+	r.Add(MaxUint32)
+	if 1 != r.GetCardinality() {
+		t.FailNow()
+	}
+	r.RemoveRange(0, 0x100000001)
+	if 0 != r.GetCardinality() {
+		t.FailNow()
+	}
+	r.Add(MaxUint32)
+	if 1 != r.GetCardinality() {
+		t.FailNow()
+	}
+	r.RemoveRange(0, 0x100000000)
+	if 0 != r.GetCardinality() {
+		t.FailNow()
+	}
+}
 
 func TestFirstLast(t *testing.T) {
 	bm := New()
@@ -22,25 +56,28 @@ func TestFirstLast(t *testing.T) {
 		t.Errorf("bad maximum")
 		t.FailNow()
 	}
+
 	i := 1 << 5
-	for ; i < (1 << 17); i += 1 {
+	for ; i < (1 << 17); i++ {
 		bm.AddInt(i)
 		if 2 != bm.Minimum() {
 			t.Errorf("bad minimum")
 			t.FailNow()
 		}
 		if uint32(i) != bm.Maximum() {
-			t.Errorf("bad maximum", i, bm.Maximum())
+			t.Errorf("bad maximum")
 			t.FailNow()
 		}
 	}
+
 	bm.RunOptimize()
+
 	if 2 != bm.Minimum() {
 		t.Errorf("bad minimum")
 		t.FailNow()
 	}
 	if uint32(i-1) != bm.Maximum() {
-		t.Errorf("bad maximum", i, bm.Maximum())
+		t.Errorf("bad maximum")
 		t.FailNow()
 	}
 }
@@ -334,6 +371,22 @@ func TestBitmap(t *testing.T) {
 		rb2.Remove(10)
 
 		So(rb1.Contains(10), ShouldBeTrue)
+	})
+	Convey("Test run array not equal", t, func() {
+		rb := NewBitmap()
+		rb2 := NewBitmap()
+		rb.AddRange(0, 1<<16)
+		for i := 0; i < 10; i++ {
+			rb2.AddInt(i)
+		}
+		So(rb.GetCardinality(), ShouldEqual, 1<<16)
+		So(rb2.GetCardinality(), ShouldEqual, 10)
+		So(rb.Equals(rb2), ShouldEqual, false)
+		rb.RunOptimize()
+		rb2.RunOptimize()
+		So(rb.GetCardinality(), ShouldEqual, 1<<16)
+		So(rb2.GetCardinality(), ShouldEqual, 10)
+		So(rb.Equals(rb2), ShouldEqual, false)
 	})
 
 	Convey("Test ANDNOT4", t, func() {
@@ -1815,6 +1868,14 @@ func TestStats(t *testing.T) {
 
 	Convey("Test Stats with run Container", t, func() {
 		// Given that we should have a single run container
+		intSize := int(unsafe.Sizeof(int(0)))
+		var runContainerBytes uint64
+		if intSize == 4 {
+			runContainerBytes = 40
+		} else {
+			runContainerBytes = 52
+		}
+
 		expectedStats := Statistics{
 			Cardinality: 60000,
 			Containers:  1,
@@ -1824,7 +1885,7 @@ func TestStats(t *testing.T) {
 			BitmapContainerBytes:  0,
 
 			RunContainers:      1,
-			RunContainerBytes:  52,
+			RunContainerBytes:  runContainerBytes,
 			RunContainerValues: 60000,
 		}
 		rr := NewBitmap()

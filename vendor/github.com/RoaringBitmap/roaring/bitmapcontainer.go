@@ -48,7 +48,7 @@ func newBitmapContainerwithRange(firstOfRun, lastOfRun int) *bitmapContainer {
 }
 
 func (bc *bitmapContainer) minimum() uint16 {
-	for i := 0; i < len(bc.bitmap); i += 1 {
+	for i := 0; i < len(bc.bitmap); i++ {
 		w := bc.bitmap[i]
 		if w != 0 {
 			r := countTrailingZeros(w)
@@ -86,7 +86,7 @@ func clz(i uint64) int {
 }
 
 func (bc *bitmapContainer) maximum() uint16 {
-	for i := len(bc.bitmap); i > 0; i -= 1 {
+	for i := len(bc.bitmap); i > 0; i-- {
 		w := bc.bitmap[i-1]
 		if w != 0 {
 			r := clz(w)
@@ -203,7 +203,7 @@ func (bc *bitmapContainer) iadd(i uint16) bool {
 	mask := uint64(1) << (uint(x) % 64)
 	newb := previous | mask
 	bc.bitmap[x/64] = newb
-	bc.cardinality += int(uint64(previous^newb) >> (uint(x) % 64))
+	bc.cardinality += int((previous ^ newb) >> (uint(x) % 64))
 	return newb != previous
 }
 
@@ -326,7 +326,7 @@ func (bc *bitmapContainer) ior(a container) container {
 			return x.clone()
 		}
 		for i := range x.iv {
-			bc.iaddRange(int(x.iv[i].start), int(x.iv[i].last)+1)
+			bc.iaddRange(int(x.iv[i].start), int(x.iv[i].last())+1)
 		}
 		if bc.isFull() {
 			return newRunContainer16Range(0, MaxUint16)
@@ -347,12 +347,28 @@ func (bc *bitmapContainer) lazyIOR(a container) container {
 		if x.isFull() {
 			return x.clone()
 		}
-		// TODO : implement efficient in-place lazy OR to bitmap
-		for i := range x.iv {
-			setBitmapRange(bc.bitmap, int(x.iv[i].start), int(x.iv[i].last)+1)
-			//bc.iaddRange(int(x.iv[i].start), int(x.iv[i].last)+1)
+
+		// Manually inlined setBitmapRange function
+		bitmap := bc.bitmap
+		for _, iv := range x.iv {
+			start := int(iv.start)
+			end := int(iv.last()) + 1
+			if start >= end {
+				continue
+			}
+			firstword := start / 64
+			endword := (end - 1) / 64
+			if firstword == endword {
+				bitmap[firstword] |= (^uint64(0) << uint(start%64)) & (^uint64(0) >> (uint(-end) % 64))
+				continue
+			}
+			bitmap[firstword] |= ^uint64(0) << uint(start%64)
+			for i := firstword + 1; i < endword; i++ {
+				bitmap[i] = ^uint64(0)
+			}
+			bitmap[endword] |= ^uint64(0) >> (uint(-end) % 64)
 		}
-		//bc.computeCardinality()
+		bc.cardinality = invalidCardinality
 		return bc
 	}
 	panic("unsupported container type")
@@ -529,7 +545,7 @@ func (bc *bitmapContainer) selectInt(x uint16) int {
 	for k := 0; k < len(bc.bitmap); k++ {
 		w := popcount(bc.bitmap[k])
 		if uint16(w) > remaining {
-			return int(k*64 + selectBitPosition(bc.bitmap[k], int(remaining)))
+			return k*64 + selectBitPosition(bc.bitmap[k], int(remaining))
 		}
 		remaining -= uint16(w)
 	}
@@ -762,7 +778,7 @@ func (bc *bitmapContainer) andNotArray(value2 *arrayContainer) container {
 		oldv := answer.bitmap[i]
 		newv := oldv &^ (uint64(1) << (vc % 64))
 		answer.bitmap[i] = newv
-		answer.cardinality -= int(uint64(oldv^newv) >> (vc % 64))
+		answer.cardinality -= int((oldv ^ newv) >> (vc % 64))
 	}
 	if answer.cardinality <= arrayDefaultMaxSize {
 		return answer.toArrayContainer()
@@ -797,7 +813,7 @@ func (bc *bitmapContainer) iandNotBitmapSurely(value2 *bitmapContainer) *bitmapC
 func (bc *bitmapContainer) contains(i uint16) bool { //testbit
 	x := uint(i)
 	w := bc.bitmap[x>>6]
-	mask := uint64(1) << uint(x&63)
+	mask := uint64(1) << (x & 63)
 	return (w & mask) != 0
 }
 
@@ -818,7 +834,7 @@ func (bc *bitmapContainer) loadData(arrayContainer *arrayContainer) {
 }
 
 func (bc *bitmapContainer) toArrayContainer() *arrayContainer {
-	ac := newArrayContainerCapacity(bc.cardinality)
+	ac := &arrayContainer{}
 	ac.loadData(bc)
 	return ac
 }
@@ -891,7 +907,7 @@ func (bc *bitmapContainer) toEfficientContainer() container {
 
 	sizeAsRunContainer := runContainer16SerializedSizeInBytes(numRuns)
 	sizeAsBitmapContainer := bitmapContainerSizeInBytes()
-	card := int(bc.getCardinality())
+	card := bc.getCardinality()
 	sizeAsArrayContainer := arrayContainerSizeInBytes(card)
 
 	if sizeAsRunContainer <= min(sizeAsBitmapContainer, sizeAsArrayContainer) {
@@ -906,14 +922,13 @@ func (bc *bitmapContainer) toEfficientContainer() container {
 func newBitmapContainerFromRun(rc *runContainer16) *bitmapContainer {
 
 	if len(rc.iv) == 1 {
-		return newBitmapContainerwithRange(int(rc.iv[0].start), int(rc.iv[0].last))
+		return newBitmapContainerwithRange(int(rc.iv[0].start), int(rc.iv[0].last()))
 	}
 
 	bc := newBitmapContainer()
 	for i := range rc.iv {
-		setBitmapRange(bc.bitmap, int(rc.iv[i].start), int(rc.iv[i].last)+1)
-		bc.cardinality += int(rc.iv[i].last) + 1 - int(rc.iv[i].start)
-		//bc.iaddRange(int(rc.iv[i].start), int(rc.iv[i].last)+1)
+		setBitmapRange(bc.bitmap, int(rc.iv[i].start), int(rc.iv[i].last())+1)
+		bc.cardinality += int(rc.iv[i].last()) + 1 - int(rc.iv[i].start)
 	}
 	//bc.computeCardinality()
 	return bc

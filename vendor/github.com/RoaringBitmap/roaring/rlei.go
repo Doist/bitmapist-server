@@ -22,11 +22,11 @@ func (rc *runContainer16) minimum() uint16 {
 }
 
 func (rc *runContainer16) maximum() uint16 {
-	return rc.iv[len(rc.iv)-1].last // assume not empty
+	return rc.iv[len(rc.iv)-1].last() // assume not empty
 }
 
 func (rc *runContainer16) isFull() bool {
-	return (len(rc.iv) == 1) && ((rc.iv[0].start == 0) && (rc.iv[0].last == MaxUint16))
+	return (len(rc.iv) == 1) && ((rc.iv[0].start == 0) && (rc.iv[0].last() == MaxUint16))
 }
 
 func (rc *runContainer16) and(a container) container {
@@ -62,12 +62,6 @@ func (rc *runContainer16) andBitmapContainer(bc *bitmapContainer) container {
 	return bc2.andBitmap(bc)
 }
 
-func (rc *runContainer16) andArray(ac *arrayContainer) container {
-	bc1 := ac.toBitmapContainer()
-	bc2 := newBitmapContainerFromRun(rc)
-	return bc2.andBitmap(bc1)
-}
-
 func (rc *runContainer16) andArrayCardinality(ac *arrayContainer) int {
 	pos := 0
 	answer := 0
@@ -79,15 +73,15 @@ func (rc *runContainer16) andArrayCardinality(ac *arrayContainer) int {
 mainloop:
 	for _, p := range rc.iv {
 		for v < p.start {
-			pos += 1
+			pos++
 			if pos == maxpos {
 				break mainloop
 			}
 			v = ac.content[pos]
 		}
-		for v <= p.last {
-			answer += 1
-			pos += 1
+		for v <= p.last() {
+			answer++
+			pos++
 			if pos == maxpos {
 				break mainloop
 			}
@@ -105,7 +99,7 @@ func (rc *runContainer16) iand(a container) container {
 	case *runContainer16:
 		return rc.inplaceIntersect(c)
 	case *arrayContainer:
-		return rc.iandArray(c)
+		return rc.andArray(c)
 	case *bitmapContainer:
 		return rc.iandBitmapContainer(c)
 	}
@@ -127,38 +121,34 @@ func (rc *runContainer16) iandBitmapContainer(bc *bitmapContainer) container {
 	return rc
 }
 
-func (rc *runContainer16) iandArray(ac *arrayContainer) container {
-
-	bc1 := newBitmapContainerFromRun(rc)
-	bc2 := ac.toBitmapContainer()
-	and := bc1.andBitmap(bc2)
-	var rc2 *runContainer16
-	switch x := and.(type) {
-	case *bitmapContainer:
-		rc2 = newRunContainer16FromBitmapContainer(x)
-	case *arrayContainer:
-		rc2 = newRunContainer16FromArray(x)
-	case *runContainer16:
-		rc2 = x
-	default:
-		panic("unknown container type")
+func (rc *runContainer16) andArray(ac *arrayContainer) container {
+	if len(rc.iv) == 0 {
+		return newArrayContainer()
 	}
-	*rc = *rc2
-	return rc
 
-	/*
-		// TODO: optimize by doing less allocation, possibly?
-		out := newRunContainer16()
-		for _, p := range rc.iv {
-			for i := p.start; i <= p.last; i++ {
-				if ac.contains(i) {
-					out.Add(i)
-				}
+	acCardinality := ac.getCardinality()
+	c := newArrayContainerCapacity(acCardinality)
+
+	for rlePos, arrayPos := 0, 0; arrayPos < acCardinality; {
+		iv := rc.iv[rlePos]
+		arrayVal := ac.content[arrayPos]
+
+		for iv.last() < arrayVal {
+			rlePos++
+			if rlePos == len(rc.iv) {
+				return c
 			}
+			iv = rc.iv[rlePos]
 		}
-		*rc = *out
-		return rc
-	*/
+
+		if iv.start > arrayVal {
+			arrayPos = advanceUntil(ac.content, arrayPos, len(ac.content), iv.start)
+		} else {
+			c.content = append(c.content, arrayVal)
+			arrayPos++
+		}
+	}
+	return c
 }
 
 func (rc *runContainer16) andNot(a container) container {
@@ -199,8 +189,8 @@ func (rc *runContainer16) iaddRange(firstOfRange, endx int) container {
 	}
 	addme := newRunContainer16TakeOwnership([]interval16{
 		{
-			start: uint16(firstOfRange),
-			last:  uint16(endx - 1),
+			start:  uint16(firstOfRange),
+			length: uint16(endx - 1 - firstOfRange),
 		},
 	})
 	*rc = *rc.union(addme)
@@ -214,7 +204,7 @@ func (rc *runContainer16) iremoveRange(firstOfRange, endx int) container {
 			" nothing to do.", firstOfRange, endx))
 		//return rc
 	}
-	x := interval16{start: uint16(firstOfRange), last: uint16(endx - 1)}
+	x := newInterval16Range(uint16(firstOfRange), uint16(endx-1))
 	rc.isubtract(x)
 	return rc
 }
@@ -256,7 +246,7 @@ func (rc *runContainer16) Not(firstOfRange, endx int) *runContainer16 {
 
 	nota := a.invert()
 
-	bs := []interval16{{start: uint16(firstOfRange), last: uint16(endx - 1)}}
+	bs := []interval16{newInterval16Range(uint16(firstOfRange), uint16(endx-1))}
 	b := newRunContainer16TakeOwnership(bs)
 
 	notAintersectB := nota.intersect(b)
@@ -369,7 +359,7 @@ func (rc *runContainer16) orBitmapContainer(bc *bitmapContainer) container {
 func (rc *runContainer16) andBitmapContainerCardinality(bc *bitmapContainer) int {
 	answer := 0
 	for i := range rc.iv {
-		answer += bc.getCardinalityInRange(uint(rc.iv[i].start), uint(rc.iv[i].last)+1)
+		answer += bc.getCardinalityInRange(uint(rc.iv[i].start), uint(rc.iv[i].last())+1)
 	}
 	//bc.computeCardinality()
 	return answer
@@ -409,7 +399,7 @@ func (rc *runContainer16) ior(a container) container {
 func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 	p("rc.inplaceUnion with len(rc2.iv)=%v", len(rc2.iv))
 	for _, p := range rc2.iv {
-		last := int64(p.last)
+		last := int64(p.last())
 		for i := int64(p.start); i <= last; i++ {
 			rc.Add(uint16(i))
 		}
@@ -606,7 +596,7 @@ func (rc *runContainer16) toBitmapContainer() *bitmapContainer {
 	p("run16 toBitmap starting; rc has %v ranges", len(rc.iv))
 	bc := newBitmapContainer()
 	for i := range rc.iv {
-		bc.iaddRange(int(rc.iv[i].start), int(rc.iv[i].last)+1)
+		bc.iaddRange(int(rc.iv[i].start), int(rc.iv[i].last())+1)
 	}
 	bc.computeCardinality()
 	return bc
@@ -682,7 +672,7 @@ func (rc *runContainer16) toEfficientContainer() container {
 func (rc *runContainer16) toArrayContainer() *arrayContainer {
 	ac := newArrayContainer()
 	for i := range rc.iv {
-		ac.iaddRange(int(rc.iv[i].start), int(rc.iv[i].last)+1)
+		ac.iaddRange(int(rc.iv[i].start), int(rc.iv[i].last())+1)
 	}
 	return ac
 }

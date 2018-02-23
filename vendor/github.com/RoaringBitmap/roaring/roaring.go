@@ -71,6 +71,26 @@ func (rb *Bitmap) ReadFrom(stream io.Reader) (int64, error) {
 	return rb.highlowcontainer.readFrom(stream)
 }
 
+// FromBuffer creates a bitmap from its serialized version stored in buffer
+//
+// The format specification is available here:
+// https://github.com/RoaringBitmap/RoaringFormatSpec
+//
+// The provided byte array (buf) is expected to be a constant.
+// The function makes the best effort attempt not to copy data.
+// You should take care not to modify buff as it will
+// likely result in unexpected program behavior.
+//
+// Resulting bitmaps are effectively immutable in the following sense:
+// a copy-on-write marker is used so that when you modify the resulting
+// bitmap, copies of selected data (containers) are made.
+// You should *not* change the copy-on-write status of the resulting
+// bitmaps (SetCopyOnWrite).
+//
+func (rb *Bitmap) FromBuffer(buf []byte) (int64, error) {
+	return rb.highlowcontainer.fromBuffer(buf)
+}
+
 // RunOptimize attempts to further compress the runs of consecutive values found in the bitmap
 func (rb *Bitmap) RunOptimize() {
 	rb.highlowcontainer.runOptimize()
@@ -118,12 +138,12 @@ func (rb *Bitmap) UnmarshalBinary(data []byte) error {
 
 // NewBitmap creates a new empty Bitmap (see also New)
 func NewBitmap() *Bitmap {
-	return &Bitmap{*newRoaringArray()}
+	return &Bitmap{}
 }
 
 // New creates a new empty Bitmap (same as NewBitmap)
 func New() *Bitmap {
-	return &Bitmap{*newRoaringArray()}
+	return &Bitmap{}
 }
 
 // Clear removes all content from the Bitmap and frees the memory
@@ -1014,7 +1034,9 @@ func (rb *Bitmap) AddRange(rangeStart, rangeEnd uint64) {
 	if rangeStart >= rangeEnd {
 		return
 	}
-
+	if rangeEnd-1 > MaxUint32 {
+		panic("rangeEnd-1 > MaxUint32")
+	}
 	hbStart := uint32(highbits(uint32(rangeStart)))
 	lbStart := uint32(lowbits(uint32(rangeStart)))
 	hbLast := uint32(highbits(uint32(rangeEnd - 1)))
@@ -1050,7 +1072,12 @@ func (rb *Bitmap) RemoveRange(rangeStart, rangeEnd uint64) {
 	if rangeStart >= rangeEnd {
 		return
 	}
-
+	if rangeEnd-1 > MaxUint32 {
+		// logically, we should assume that the user wants to
+		// remove all values from rangeStart to infinity
+		// see https://github.com/RoaringBitmap/roaring/issues/141
+		rangeEnd = uint64(0x100000000)
+	}
 	hbStart := uint32(highbits(uint32(rangeStart)))
 	lbStart := uint32(lowbits(uint32(rangeStart)))
 	hbLast := uint32(highbits(uint32(rangeEnd - 1)))
@@ -1163,6 +1190,7 @@ func Flip(bm *Bitmap, rangeStart, rangeEnd uint64) *Bitmap {
 // SetCopyOnWrite sets this bitmap to use copy-on-write so that copies are fast and memory conscious
 // if the parameter is true, otherwise we leave the default where hard copies are made
 // (copy-on-write requires extra care in a threaded context).
+// Calling SetCopyOnWrite(true) on a bitmap created with FromBuffer is unsafe.
 func (rb *Bitmap) SetCopyOnWrite(val bool) {
 	rb.highlowcontainer.copyOnWrite = val
 }
