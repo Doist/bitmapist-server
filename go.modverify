@@ -1,12 +1,16 @@
 github.com/RoaringBitmap/roaring v0.3.10 h1:EwmBOkCq2+K4IMG3QFUgVuY/rBOul41lGWNpx7hlYsY=
 github.com/RoaringBitmap/roaring v0.4.2 h1:1sr4RJyccENSF6l949N6/LRyz92fcSlkefq/Zrz55jI=
+github.com/RoaringBitmap/roaring v0.4.6 h1:Tsb0GCKbiM76b9QMq8wnVcPpEDDuKPnhP7cnhbvjvxc=
 github.com/artyom/autoflags v1.1.0 h1:Cz3qb/qSkhmt/Zgsu3D/HwMJtKYUSV5kctI6O9bekv4=
 github.com/artyom/red v0.0.0-20170208121325-d6616c8bb9ec h1:QZeKfanvuWoZJ/bh8HcOh+dVTVMQvcQuHOIlgd5OjQ8=
 github.com/artyom/resp v0.0.0-20170119170417-9548a1125f15 h1:sIPeP8thZwsJ4/53l0U6d6TpqOTQt/BVLr9ghIlRHGk=
+github.com/artyom/resp v1.0.0 h1:SVdA6KMZQ+NshbKtVd/gckbO4YIkZov8NhqL1QJbLXg=
 github.com/boltdb/bolt v1.3.1 h1:JQmyP4ZBrce+ZQu0dY660FMfatumYDLun9hBCUVIkF4=
 github.com/glycerine/go-unsnap-stream v0.0.0-20171127062821-62a9a9eb44fd h1:f+V6G35pXW+wB7wqe3dcbRTeCk1J07CcpzM80nhxbBs=
+github.com/glycerine/go-unsnap-stream v0.0.0-20180323001048-9f0cb55181dd h1:r04MMPyLHj/QwZuMJ5+7tJcBr1AQjpiAK/rZWRrQT7o=
 github.com/golang/snappy v0.0.0-20170215233205-553a64147049 h1:K9KHZbXKpGydfDN0aZrsoHpLJlZsBrGMFWbgLDGnPZk=
 github.com/mediocregopher/radix.v2 v0.0.0-20170828160326-d234cfb904a9 h1:LGCsWeX+LnXGCqdryB2+KEpC5Qsm701e7LhT7QzKEIA=
 github.com/mediocregopher/radix.v2 v0.0.0-20171222223842-4699b97613b7 h1:Q4Vcjr64nKH6uvK9B8Bvn4KDZG02J6VadN0ipbd7+bY=
+github.com/mediocregopher/radix.v2 v0.0.0-20180415154522-596a3ed684d9 h1:/jJBiRh5U0KVcYDQwAvfbTI+w1ohX85Kprt2P3MEAps=
 github.com/philhofer/fwd v1.0.0 h1:UbZqGr5Y38ApvM/V/jEljVxwocdweyH+vmYvRPBnbqQ=
 github.com/tinylib/msgp v1.0.2 h1:DfdQrzQa7Yh2es9SuLkixqxuXS2SxsdYn0KbdrOGWD8=
