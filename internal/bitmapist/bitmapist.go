@@ -166,8 +166,12 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 		if bkt == nil {
 			return errors.New("bucket not found")
 		}
+		data := bkt.Get([]byte(key))
+		if data == nil {
+			return nil
+		}
 		bm := roaring.NewBitmap()
-		if err := bm.UnmarshalBinary(bkt.Get([]byte(key))); err != nil {
+		if err := bm.UnmarshalBinary(data); err != nil {
 			return err
 		}
 		v.b = bm
