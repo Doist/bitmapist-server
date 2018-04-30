@@ -246,7 +246,47 @@ func (s *Server) persist() error {
 			return err
 		}
 	}
+	type keyVal struct {
+		k string
+		v []byte
+	}
+	save := func(batch []keyVal) error {
+		if len(batch) == 0 {
+			return nil
+		}
+		return s.db.Update(func(tx *bolt.Tx) error {
+			bkt, err := tx.CreateBucketIfNotExists(bucketName)
+			if err != nil {
+				return err
+			}
+			for _, kv := range batch {
+				if err := bkt.Put([]byte(kv.k), kv.v); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	markDirty := func(batch []keyVal) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, kv := range batch {
+			if v, ok := s.cache[kv.k]; ok {
+				v.dirty = true
+				s.cache[kv.k] = v
+			}
+		}
+	}
+	const maxBatchSize = 400
+	batch := make([]keyVal, 0, maxBatchSize)
 	for _, k := range dirty {
+		if len(batch) == maxBatchSize {
+			if err := save(batch); err != nil {
+				markDirty(batch)
+				return err
+			}
+			batch = batch[:0]
+		}
 		s.mu.Lock()
 		v, ok := s.cache[k]
 		if !ok {
@@ -261,22 +301,11 @@ func (s *Server) persist() error {
 		v.dirty = false
 		s.cache[k] = v
 		s.mu.Unlock()
-		err = s.db.Update(func(tx *bolt.Tx) error {
-			bkt, err := tx.CreateBucketIfNotExists(bucketName)
-			if err != nil {
-				return err
-			}
-			return bkt.Put([]byte(k), data)
-		})
-		if err != nil {
-			s.mu.Lock()
-			if v, ok := s.cache[k]; ok {
-				v.dirty = true
-				s.cache[k] = v
-			}
-			s.mu.Unlock()
-			return err
-		}
+		batch = append(batch, keyVal{k: k, v: data})
+	}
+	if err := save(batch); err != nil {
+		markDirty(batch)
+		return err
 	}
 	s.mu.Lock()
 	keys := make([]string, 0, len(s.keys))
@@ -288,14 +317,13 @@ func (s *Server) persist() error {
 	if err := gob.NewEncoder(buf).Encode(keys); err != nil {
 		return err
 	}
-	err := s.db.Update(func(tx *bolt.Tx) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
 		bkt, err := tx.CreateBucketIfNotExists([]byte("aux"))
 		if err != nil {
 			return err
 		}
 		return bkt.Put([]byte("keys"), buf.Bytes())
 	})
-	return err
 }
 
 func (s *Server) handleSlurp(req red.Request) (interface{}, error) {
