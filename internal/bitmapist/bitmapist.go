@@ -4,6 +4,8 @@ package bitmapist
 
 import (
 	"bytes"
+	"context"
+	"encoding/binary"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -79,6 +81,9 @@ func (s *Server) Register(srv *red.Server) {
 	srv.Handle("scan", s.handleScan)
 	srv.Handle("info", s.handleInfo)
 	srv.Handle("select", handleSelect)
+	srv.Handle("ttl", s.handleTTL)
+	srv.Handle("pttl", s.handlePTTL)
+	srv.Handle("expire", s.handleExpire)
 }
 
 // Shutdown performs saves current state on disk and closes database. Shutdown
@@ -90,9 +95,10 @@ func (s *Server) Shutdown() error {
 }
 
 type cacheItem struct {
-	b     *roaring.Bitmap
-	aTime int64 // unix timestamp of last access
-	dirty bool  // true if has unsaved modifications
+	b      *roaring.Bitmap
+	aTime  int64 // unix timestamp of last access
+	expire int64 // nanoseconds unix timestamp of expiration time, if set
+	dirty  bool  // true if has unsaved modifications
 }
 
 // Server is a standalone bitmapist server implementation. It's intended to be
@@ -114,6 +120,7 @@ type Server struct {
 }
 
 var bucketName = []byte("bitmapist")
+var expiresBucket = []byte("expires")
 
 func (s *Server) exists(key string) bool {
 	s.mu.Lock()
@@ -122,7 +129,7 @@ func (s *Server) exists(key string) bool {
 	return ok
 }
 
-func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap) {
+func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap, keepExpire bool) {
 	if withLock {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -132,11 +139,15 @@ func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap) {
 		aTime: time.Now().Unix(),
 		dirty: true,
 	}
+	if prev, ok := s.cache[key]; keepExpire && ok && prev.expire > time.Now().UnixNano() {
+		v.expire = prev.expire
+	}
 	s.keys[key] = struct{}{}
 	s.cache[key] = v
 }
 
 func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, error) {
+	nanots := time.Now().UnixNano()
 	if _, ok := s.keys[key]; !ok {
 		if !create {
 			return nil, nil
@@ -150,6 +161,20 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 		return s.cache[key].b, nil
 	}
 	if v, ok := s.cache[key]; ok {
+		if v.expire > 0 && nanots > v.expire { // already expired
+			// TODO: refactor this block to merge it with similar
+			// one above
+			if !create {
+				return nil, nil
+			}
+			s.keys[key] = struct{}{}
+			s.cache[key] = cacheItem{
+				b:     roaring.NewBitmap(),
+				aTime: time.Now().Unix(),
+				dirty: true,
+			}
+			return s.cache[key].b, nil
+		}
 		v.aTime = time.Now().Unix()
 		if !v.dirty && setDirty {
 			v.dirty = true
@@ -162,6 +187,28 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 		dirty: setDirty,
 	}
 	err := s.db.View(func(tx *bolt.Tx) error {
+		{ // expiration check
+			bkt := tx.Bucket(expiresBucket)
+			if bkt == nil {
+				goto readValue
+			}
+			data := bkt.Get([]byte(key))
+			if data == nil {
+				goto readValue
+			}
+			switch exp, n := binary.Varint(data); {
+			case n == 0:
+				return errors.New("expire decode: buf too small")
+			case n < 0:
+				return errors.New("expire decode: 64 bits overflow")
+			case exp < nanots: // expired
+				v.b = roaring.NewBitmap()
+				return nil
+			default:
+				v.expire = exp
+			}
+		}
+	readValue:
 		bkt := tx.Bucket(bucketName)
 		if bkt == nil {
 			return errors.New("bucket not found")
@@ -179,6 +226,12 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 	})
 	if err != nil {
 		return nil, err
+	}
+	if v.b == nil {
+		if !create {
+			return nil, nil
+		}
+		v.b = roaring.NewBitmap()
 	}
 	s.cache[key] = v
 	return v.b, nil
@@ -200,8 +253,10 @@ func (s *Server) loop() {
 	for {
 		select {
 		case <-ticker.C:
+			s.sweepExpired()
 			fn("periodic saving...", s.persist)
 		case <-s.save:
+			s.sweepExpired()
 			fn("forced saving...", s.persist)
 		case <-s.done:
 			fn("final saving...", s.persist)
@@ -210,13 +265,55 @@ func (s *Server) loop() {
 	}
 }
 
+func (s *Server) sweepExpired() error {
+	now := time.Now().UnixNano()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond) // TODO
+	defer cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.db.View(func(tx *bolt.Tx) error {
+		bkt := tx.Bucket(expiresBucket)
+		if bkt == nil {
+			return nil
+		}
+		return bkt.ForEach(func(k, v []byte) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			if exp, n := binary.Varint(v); n <= 0 || exp > now {
+				return nil
+			}
+			// expired
+			if _, ok := s.cache[string(k)]; ok {
+				// skip keys that have something cached for
+				// them: cache may hold new version which
+				// differs from persisted one — persist() method
+				// will take care of those items
+				return nil
+			}
+			s.delete(false, string(k))
+			return nil
+		})
+	})
+}
+
 func (s *Server) persist() error {
-	now := time.Now().Unix()
+	now := time.Now()
+	nowUnix := now.Unix()
+	nowUnixNano := now.UnixNano()
 	s.mu.Lock()
 	dirty := make([]string, 0, len(s.cache))
 	for k, v := range s.cache {
+		if v.expire > 0 && v.expire <= nowUnixNano {
+			delete(s.keys, k)
+			delete(s.cache, k)
+			s.rm[k] = struct{}{}
+			continue
+		}
 		if !v.dirty {
-			if v.aTime < now-300 {
+			if v.aTime < nowUnix-300 {
 				delete(s.cache, k)
 			}
 			continue
@@ -231,13 +328,15 @@ func (s *Server) persist() error {
 	s.mu.Unlock()
 	if len(toPurge) > 0 {
 		err := s.db.Update(func(tx *bolt.Tx) error {
-			bkt, err := tx.CreateBucketIfNotExists(bucketName)
-			if err != nil {
-				return err
-			}
-			for _, k := range toPurge {
-				if err := bkt.Delete([]byte(k)); err != nil {
+			for _, name := range [][]byte{bucketName, expiresBucket} {
+				bkt, err := tx.CreateBucketIfNotExists(name)
+				if err != nil {
 					return err
+				}
+				for _, k := range toPurge {
+					if err := bkt.Delete([]byte(k)); err != nil {
+						return err
+					}
 				}
 			}
 			return nil
@@ -249,6 +348,7 @@ func (s *Server) persist() error {
 	type keyVal struct {
 		k string
 		v []byte
+		e int64 // expiration timestamp
 	}
 	save := func(batch []keyVal) error {
 		if len(batch) == 0 {
@@ -261,6 +361,20 @@ func (s *Server) persist() error {
 			}
 			for _, kv := range batch {
 				if err := bkt.Put([]byte(kv.k), kv.v); err != nil {
+					return err
+				}
+			}
+			bkt, err = tx.CreateBucketIfNotExists(expiresBucket)
+			if err != nil {
+				return err
+			}
+			for _, kv := range batch {
+				if kv.e == 0 {
+					continue
+				}
+				buf := make([]byte, binary.MaxVarintLen64)
+				n := binary.PutVarint(buf, kv.e)
+				if err := bkt.Put([]byte(kv.k), buf[:n]); err != nil {
 					return err
 				}
 			}
@@ -301,7 +415,7 @@ func (s *Server) persist() error {
 		v.dirty = false
 		s.cache[k] = v
 		s.mu.Unlock()
-		batch = append(batch, keyVal{k: k, v: data})
+		batch = append(batch, keyVal{k: k, v: data, e: v.expire})
 	}
 	if err := save(batch); err != nil {
 		markDirty(batch)
@@ -341,6 +455,100 @@ func (s *Server) handleSlurp(req red.Request) (interface{}, error) {
 		s.log.Println("import from redis completed in", time.Since(begin))
 	}()
 	return resp.OK, nil
+}
+
+func (s *Server) handleExpire(req red.Request) (interface{}, error) {
+	if len(req.Args) != 2 {
+		return nil, red.ErrWrongArgs
+	}
+	seconds, err := strconv.ParseInt(req.Args[1], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.expireKey(req.Args[0], time.Duration(seconds)*time.Second)
+	return res, err
+}
+
+func (s *Server) handleTTL(req red.Request) (interface{}, error) {
+	if len(req.Args) != 1 {
+		return nil, red.ErrWrongArgs
+	}
+	v, err := s.keyTTLnanos(req.Args[0])
+	if err != nil {
+		return nil, err
+	}
+	if v < 0 {
+		return v, nil
+	}
+	d := time.Duration(v).Round(time.Millisecond)
+	return int64(d / time.Second), nil
+}
+
+func (s *Server) handlePTTL(req red.Request) (interface{}, error) {
+	if len(req.Args) != 1 {
+		return nil, red.ErrWrongArgs
+	}
+	v, err := s.keyTTLnanos(req.Args[0])
+	if err != nil {
+		return nil, err
+	}
+	if v < 0 {
+		return v, nil
+	}
+	d := time.Duration(v).Round(time.Millisecond)
+	return int64(d / time.Millisecond), nil
+}
+
+func (s *Server) keyTTLnanos(key string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.keys[key]; !ok {
+		return -2, nil
+	}
+	if _, ok := s.cache[key]; !ok {
+		if _, err := s.getBitmap(key, false, false); err != nil {
+			return 0, err
+		}
+	}
+	nanots := time.Now().UnixNano()
+	if v, ok := s.cache[key]; ok {
+		switch {
+		case v.expire == 0:
+			return -1, nil
+		case v.expire < nanots: // expired
+			return -2, nil
+		}
+		return (v.expire - nanots), nil
+	}
+	return -2, nil
+}
+
+func (s *Server) expireKey(key string, diff time.Duration) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.keys[key]; !ok {
+		return 0, nil
+	}
+	if diff <= 0 {
+		s.delete(false, key)
+		return 1, nil
+	}
+	now := time.Now()
+	nanots := now.UnixNano()
+	if _, ok := s.cache[key]; !ok {
+		if _, err := s.getBitmap(key, false, false); err != nil {
+			return 0, err
+		}
+	}
+	if v, ok := s.cache[key]; ok {
+		if v.expire > 0 && v.expire < nanots {
+			return 0, nil
+		}
+		v.expire = now.Add(diff).UnixNano()
+		s.cache[key] = v
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func (s *Server) handleGet(req red.Request) (interface{}, error) {
@@ -489,7 +697,7 @@ func (s *Server) setBit(key string, offset uint32) (bool, error) {
 	}
 	if bm == nil {
 		bm = roaring.NewBitmap()
-		s.putBitmap(false, key, bm)
+		s.putBitmap(false, key, bm, true)
 	}
 	return bm.CheckedAdd(offset), nil
 }
@@ -503,7 +711,7 @@ func (s *Server) clearBit(key string, offset uint32) (bool, error) {
 	}
 	if bm == nil {
 		bm = roaring.NewBitmap()
-		s.putBitmap(false, key, bm)
+		s.putBitmap(false, key, bm, true)
 	}
 	return bm.CheckedRemove(offset), nil
 }
@@ -566,7 +774,7 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 		if len(src) > 0 {
 			// mix of found and missing keys, result would be empty
 			// (but set) bitmap
-			s.putBitmap(false, key, roaring.NewBitmap())
+			s.putBitmap(false, key, roaring.NewBitmap(), false)
 			return 0, nil
 		}
 	}
@@ -576,7 +784,7 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 	}
 	xbm := roaring.FastAnd(src...)
 	max := maxValue(xbm)
-	s.putBitmap(false, key, xbm)
+	s.putBitmap(false, key, xbm, false)
 	sz := max / 8
 	if max%8 > 0 {
 		sz++
@@ -603,7 +811,7 @@ func (s *Server) bitopOr(key string, sources []string) (int64, error) {
 	}
 	xbm := roaring.FastOr(src...)
 	max := maxValue(xbm)
-	s.putBitmap(false, key, xbm)
+	s.putBitmap(false, key, xbm, false)
 	sz := max / 8
 	if max%8 > 0 {
 		sz++
@@ -634,7 +842,7 @@ func (s *Server) bitopXor(key string, sources []string) (int64, error) {
 	}
 	xbm := roaring.HeapXor(src...)
 	max := maxValue(xbm)
-	s.putBitmap(false, key, xbm)
+	s.putBitmap(false, key, xbm, false)
 	sz := max / 8
 	if max%8 > 0 {
 		sz++
@@ -662,7 +870,7 @@ func (s *Server) bitopNot(dst, src string) (int64, error) {
 		upper += (8 - x)
 	}
 	b2 := roaring.Flip(b1, 0, upper)
-	s.putBitmap(false, dst, b2)
+	s.putBitmap(false, dst, b2, false)
 	return int64(upper / 8), nil
 }
 

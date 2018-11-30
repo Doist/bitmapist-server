@@ -59,6 +59,11 @@ func TestAgainstRedis(t *testing.T) {
 		"bitop and dst foo bar",
 		"get dst",
 
+		"ttl nonexistent",
+		"ttl dst",
+		"expire dst 60",
+		"ttl dst",
+
 		"quit",
 	}
 

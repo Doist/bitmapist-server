@@ -34,6 +34,8 @@ func TestServer(t *testing.T) {
 	checkResponse(t, "get bar", "\x01", rd, conn)
 	checkResponse(t, "get baz", "\x00\x80", rd, conn)
 
+	checkResponse(t, "expire dst 60", int64(0), rd, conn)
+
 	checkResponse(t, "bitop or dst foo bar", int64(2), rd, conn)
 	checkResponse(t, "bitcount dst", int64(2), rd, conn)
 	checkResponse(t, "getbit dst 10", int64(1), rd, conn)
@@ -41,11 +43,19 @@ func TestServer(t *testing.T) {
 	checkResponse(t, "getbit dst 0", int64(0), rd, conn)
 	checkResponse(t, "get dst", "\x01 ", rd, conn)
 
+	checkResponse(t, "ttl nonexistent", int64(-2), rd, conn)
+	checkResponse(t, "ttl dst", int64(-1), rd, conn)
+	checkResponse(t, "expire dst 60", int64(1), rd, conn)
+	checkResponse(t, "ttl dst", int64(60), rd, conn)
+
 	checkResponse(t, "bitop xor dst foo bar", int64(2), rd, conn)
 	checkResponse(t, "bitcount dst", int64(1), rd, conn)
 	checkResponse(t, "getbit dst 10", int64(1), rd, conn)
 	checkResponse(t, "getbit dst 7", int64(0), rd, conn)
 	checkResponse(t, "get dst", "\x00 ", rd, conn)
+
+	// ensure that bitop does not retain ttl of its destination
+	checkResponse(t, "ttl dst", int64(-1), rd, conn)
 
 	checkResponse(t, "bitop xor dst foo bar baz", int64(2), rd, conn)
 	checkResponse(t, "bitcount dst", int64(2), rd, conn)
