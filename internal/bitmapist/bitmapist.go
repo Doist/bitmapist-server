@@ -148,7 +148,8 @@ func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap, keepEx
 
 func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, error) {
 	nanots := time.Now().UnixNano()
-	if _, ok := s.keys[key]; !ok {
+	switch v, ok := s.cache[key]; {
+	case !ok || (ok && v.expire > 0 && nanots > v.expire): // not found or expired
 		if !create {
 			return nil, nil
 		}
@@ -159,22 +160,7 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 			dirty: true,
 		}
 		return s.cache[key].b, nil
-	}
-	if v, ok := s.cache[key]; ok {
-		if v.expire > 0 && nanots > v.expire { // already expired
-			// TODO: refactor this block to merge it with similar
-			// one above
-			if !create {
-				return nil, nil
-			}
-			s.keys[key] = struct{}{}
-			s.cache[key] = cacheItem{
-				b:     roaring.NewBitmap(),
-				aTime: time.Now().Unix(),
-				dirty: true,
-			}
-			return s.cache[key].b, nil
-		}
+	case ok:
 		v.aTime = time.Now().Unix()
 		if !v.dirty && setDirty {
 			v.dirty = true
