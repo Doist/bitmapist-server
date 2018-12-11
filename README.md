@@ -12,9 +12,12 @@ With the same dataset migrated to standalone bitmapist server under the same loa
 
 ## Installation
 
-You'd need [Go](https://golang.org/dl/) in order to build bitmapist server. To install bitmapist server:
+You'd need [Go](https://golang.org/dl/) in order to build bitmapist server. To build bitmapist server:
 
-	go get -u github.com/Doist/bitmapist-server
+	cd bitmapist-server # directory you've cloned repository
+	go build
+
+Binary will be saved as `bitmapist-server`.
 
 ## Usage
 
