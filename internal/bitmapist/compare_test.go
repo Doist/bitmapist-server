@@ -64,6 +64,12 @@ func TestAgainstRedis(t *testing.T) {
 		"expire dst 60",
 		"ttl dst",
 
+		"setbit src_rename 1 1",
+		"expire src_rename 60",
+		"rename src_rename dst_rename",
+		"ttl dst_rename",
+		"getbit dst_rename 1",
+
 		"quit",
 	}
 

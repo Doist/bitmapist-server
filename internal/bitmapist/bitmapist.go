@@ -84,6 +84,7 @@ func (s *Server) Register(srv *red.Server) {
 	srv.Handle("ttl", s.handleTTL)
 	srv.Handle("pttl", s.handlePTTL)
 	srv.Handle("expire", s.handleExpire)
+	srv.Handle("rename", s.handleRename)
 }
 
 // Shutdown performs saves current state on disk and closes database. Shutdown
@@ -634,6 +635,36 @@ func (s *Server) handleSetbit(r red.Request) (interface{}, error) {
 		return !ok, err
 	}
 	return nil, red.ErrWrongArgs
+}
+
+func (s *Server) handleRename(r red.Request) (interface{}, error) {
+	if len(r.Args) != 2 {
+		return nil, red.ErrWrongArgs
+	}
+	src, dst := r.Args[0], r.Args[1]
+	errNoKey := errors.New("no such key")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.keys[src]; !ok {
+		return nil, errNoKey
+	}
+	if _, ok := s.cache[src]; !ok {
+		if _, err := s.getBitmap(src, false, false); err != nil {
+			return nil, err
+		}
+	}
+	v, ok := s.cache[src]
+	if !ok || (v.expire > 0 && v.expire < time.Now().UnixNano()) {
+		return nil, errNoKey
+	}
+	if src == dst {
+		return resp.OK, nil
+	}
+	v.dirty = true
+	s.delete(false, src)
+	s.keys[dst] = struct{}{}
+	s.cache[dst] = v
+	return resp.OK, nil
 }
 
 func (s *Server) handleKeys(r red.Request) (interface{}, error) {

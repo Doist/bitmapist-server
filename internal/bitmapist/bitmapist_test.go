@@ -78,6 +78,12 @@ func TestServer(t *testing.T) {
 	checkResponse(t, "getbit dst 15", int64(1), rd, conn)
 	checkResponse(t, "getbit dst 16", int64(0), rd, conn)
 	checkResponse(t, "get dst", "\xff\x7f", rd, conn)
+
+	checkResponse(t, "setbit src_rename 1 1", int64(0), rd, conn)
+	checkResponse(t, "expire src_rename 60", int64(1), rd, conn)
+	checkResponse(t, "rename src_rename dst_rename", "OK", rd, conn)
+	checkResponse(t, "ttl dst_rename", int64(60), rd, conn)
+	checkResponse(t, "getbit dst_rename 1", int64(1), rd, conn)
 }
 
 func checkResponse(t testing.TB, req string, respWanted interface{}, rd resp.BytesReader, wr io.Writer) {
