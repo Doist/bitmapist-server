@@ -58,6 +58,8 @@ func TestAgainstRedis(t *testing.T) {
 
 		"bitop and dst foo bar",
 		"get dst",
+		"set dst \xff\x7f",
+		"get dst",
 
 		"ttl nonexistent",
 		"ttl dst",

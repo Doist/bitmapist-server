@@ -76,6 +76,7 @@ func (s *Server) Register(srv *red.Server) {
 	srv.Handle("exists", s.handleExists)
 	srv.Handle("del", s.handleDel)
 	srv.Handle("get", s.handleGet)
+	srv.Handle("set", s.handleSet)
 	srv.Handle("bgsave", s.handleBgsave)
 	srv.Handle("slurp", s.handleSlurp)
 	srv.Handle("scan", s.handleScan)
@@ -545,6 +546,14 @@ func (s *Server) handleGet(req red.Request) (interface{}, error) {
 	return s.bitmapBytes(req.Args[0])
 }
 
+func (s *Server) handleSet(req red.Request) (interface{}, error) {
+	if len(req.Args) != 2 {
+		return nil, red.ErrWrongArgs
+	}
+	s.setFromBytes(req.Args[0], []byte(req.Args[1]))
+	return resp.OK, nil
+}
+
 func (s *Server) handleBgsave(r red.Request) (interface{}, error) {
 	if len(r.Args) != 0 {
 		return nil, red.ErrWrongArgs
@@ -907,6 +916,21 @@ func (s *Server) delete(withLock bool, keys ...string) int {
 		s.rm[k] = struct{}{}
 	}
 	return cnt
+}
+
+func (s *Server) setFromBytes(key string, data []byte) {
+	var vals []uint32
+	for i, b := range data {
+		if b == 0 {
+			continue
+		}
+		for j := byte(0); j <= 7; j++ {
+			if b&(1<<(7-j)) != 0 {
+				vals = append(vals, uint32(i*8)+uint32(j))
+			}
+		}
+	}
+	s.putBitmap(true, key, roaring.BitmapOf(vals...), false)
 }
 
 func (s *Server) bitmapBytes(key string) ([]byte, error) {

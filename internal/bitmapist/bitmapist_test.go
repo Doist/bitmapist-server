@@ -63,6 +63,8 @@ func TestServer(t *testing.T) {
 	checkResponse(t, "getbit dst 8", int64(1), rd, conn)
 	checkResponse(t, "getbit dst 7", int64(0), rd, conn)
 	checkResponse(t, "get dst", "\x00\xa0", rd, conn)
+	checkResponse(t, "set dst \x00\xa0", "OK", rd, conn)
+	checkResponse(t, "get dst", "\x00\xa0", rd, conn)
 
 	checkResponse(t, "bitop and dst foo bar", int64(1), rd, conn)
 	checkResponse(t, "bitcount dst", int64(1), rd, conn)
@@ -77,6 +79,8 @@ func TestServer(t *testing.T) {
 	checkResponse(t, "getbit dst 8", int64(0), rd, conn)
 	checkResponse(t, "getbit dst 15", int64(1), rd, conn)
 	checkResponse(t, "getbit dst 16", int64(0), rd, conn)
+	checkResponse(t, "get dst", "\xff\x7f", rd, conn)
+	checkResponse(t, "set dst \xff\x7f", "OK", rd, conn)
 	checkResponse(t, "get dst", "\xff\x7f", rd, conn)
 
 	checkResponse(t, "setbit src_rename 1 1", int64(0), rd, conn)
