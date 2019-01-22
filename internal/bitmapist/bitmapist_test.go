@@ -146,3 +146,60 @@ func newServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
 }
 
 type clientConnFunc func() net.Conn
+
+func TestServerPersistence(t *testing.T) {
+	td, err := ioutil.TempDir("", "bitmapist-test-")
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	defer os.RemoveAll(td)
+	newServerDirectory := func(t testing.TB) (fn clientConnFunc, cleanup func()) {
+		srv, err := New(filepath.Join(td, "temp.db"))
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
+		redsrv := red.NewServer()
+		srv.Register(redsrv)
+		unixSocket := filepath.Join(td, "bitmapist.sock")
+		ln, err := net.Listen("unix", unixSocket)
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
+		go func() { redsrv.Serve(ln) }()
+		fn = func() net.Conn {
+			conn, err := net.DialTimeout("unix", unixSocket, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			return conn
+		}
+		cleanup = func() {
+			ln.Close()
+			if err := srv.Shutdown(); err != nil {
+				t.Error(err)
+			}
+		}
+		return fn, cleanup
+	}
+	cf, cleanup := newServerDirectory(t)
+	conn := cf()
+	rd := bufio.NewReader(conn)
+	checkResponse(t, "setbit foo 10 1", int64(0), rd, conn)
+	checkResponse(t, "setbit foo 7 1", int64(0), rd, conn)
+	conn.Close()
+	cleanup()
+
+	// second launch should load data from disk
+	cf, cleanup = newServerDirectory(t)
+	defer cleanup()
+	conn = cf()
+	rd = bufio.NewReader(conn)
+	defer conn.Close()
+	checkResponse(t, "get foo", "\x01 ", rd, conn)
+}
