@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/artyom/red"
 	"github.com/artyom/resp"
 	"github.com/boltdb/bolt"
+	"github.com/golang/snappy"
 	"github.com/mediocregopher/radix.v2/redis"
 )
 
@@ -42,8 +44,26 @@ func New(dbFile string) (*Server, error) {
 	}
 	err = s.db.View(func(tx *bolt.Tx) error {
 		if bkt := tx.Bucket([]byte("aux")); bkt != nil {
+			// new path: load packed keys as compressed steam of
+			// json-encoded strings
+			var rd io.Reader = snappy.NewReader(bytes.NewReader(bkt.Get([]byte("keys"))))
+			var k string
+			for dec := json.NewDecoder(rd); ; {
+				err := dec.Decode(&k)
+				if err == io.EOF {
+					return nil
+				}
+				if err != nil {
+					s.keys = make(map[string]struct{})
+					break
+				}
+				s.keys[k] = struct{}{}
+			}
+
+			// legacy path: load packed keys as single gob-encoded
+			// []string
 			var keys []string
-			rd := bytes.NewReader(bkt.Get([]byte("keys")))
+			rd = bytes.NewReader(bkt.Get([]byte("keys")))
 			if err := gob.NewDecoder(rd).Decode(&keys); err == nil && len(keys) > 0 {
 				for _, k := range keys {
 					s.keys[k] = struct{}{}
@@ -51,6 +71,7 @@ func New(dbFile string) (*Server, error) {
 				return nil
 			}
 		}
+		// fallback: read all keys directly from bucket
 		bkt := tx.Bucket(bucketName)
 		if bkt == nil {
 			return nil
@@ -421,14 +442,23 @@ func (s *Server) persist() error {
 		markDirty(batch)
 		return err
 	}
-	s.mu.Lock()
-	keys := make([]string, 0, len(s.keys))
-	for k := range s.keys {
-		keys = append(keys, k)
-	}
-	s.mu.Unlock()
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(keys); err != nil {
+	buf, err := func() ([]byte, error) {
+		buf := new(bytes.Buffer)
+		wr := snappy.NewBufferedWriter(buf)
+		enc := json.NewEncoder(wr)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for k := range s.keys {
+			if err := enc.Encode(k); err != nil {
+				return nil, err
+			}
+		}
+		if err := wr.Close(); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}()
+	if err != nil {
 		return err
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
@@ -436,7 +466,7 @@ func (s *Server) persist() error {
 		if err != nil {
 			return err
 		}
-		return bkt.Put([]byte("keys"), buf.Bytes())
+		return bkt.Put([]byte("keys"), buf)
 	})
 }
 
