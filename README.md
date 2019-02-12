@@ -31,7 +31,7 @@ Binary will be saved as `bitmapist-server`.
 
 Service mmaps its database so it is not safe to copy database while process is running. If you need to get a consistent snapshot without downtime, point `-bak` flag to a separate file; process would save a consistent copy of its database to this file on USR1 signal.
 
-You may need to migrate data from already running redis instance; to do so, issue a special command over redis protocol: `slurp host:port` where host:port specifies address of running redis instance filled with data. Note that all string keys would be imported from this redis instance, it's expected that instance is only used for bitmapist data.
+You may need to migrate data from already running redis instance; to do so, issue a special command over redis protocol: `slurp host:port [db]` where `host`, `port` and `db` specify the address and optionally the number of the running redis database to import. Note that all string keys would be imported from this redis instance, it's expected that instance is only used for bitmapist data.
 
 Special command `info keys` displays total number of keys in database and number of cached (hot) keys.
 
