@@ -1040,16 +1040,16 @@ func (s *Server) redisImport(addr string, db int) error {
 		return err
 	}
 	defer client.Close()
+	if db != 0 {
+		resp := client.Cmd("SELECT", db)
+		if resp.Err != nil {
+			return resp.Err
+		}
+	}
 	var vals []uint32
 	var done bool
 	cursor := "0"
 	for !done {
-		if db != 0 {
-			resp := client.Cmd("SELECT", db)
-			if resp.Err != nil {
-				return resp.Err
-			}
-		}
 		a, err := client.Cmd("SCAN", cursor, "count", "10000").Array()
 		if err != nil {
 			return err
