@@ -471,14 +471,22 @@ func (s *Server) persist() error {
 }
 
 func (s *Server) handleSlurp(req red.Request) (interface{}, error) {
-	if len(req.Args) != 1 {
+	if len(req.Args) != 1 && len(req.Args) != 2 {
 		return nil, red.ErrWrongArgs
 	}
 	addr := req.Args[0]
+	db := 0
+	if len(req.Args) == 2 {
+		var parseError error
+		db, parseError = strconv.Atoi(req.Args[1])
+		if parseError != nil {
+			return nil, red.ErrWrongArgs
+		}
+	}
 	go func() {
-		s.log.Println("importing redis dataset from", addr)
+		s.log.Printf("importing redis dataset from %v db %d", addr, db)
 		begin := time.Now()
-		if err := s.redisImport(addr); err != nil {
+		if err := s.redisImport(addr, db); err != nil {
 			s.log.Println("redis import error:", err)
 			return
 		}
@@ -1026,7 +1034,7 @@ func (s *Server) Backup(w io.Writer) error {
 	})
 }
 
-func (s *Server) redisImport(addr string) error {
+func (s *Server) redisImport(addr string, db int) error {
 	client, err := redis.Dial("tcp", addr)
 	if err != nil {
 		return err
@@ -1036,6 +1044,12 @@ func (s *Server) redisImport(addr string) error {
 	var done bool
 	cursor := "0"
 	for !done {
+		if db != 0 {
+			resp := client.Cmd("SELECT", db)
+			if resp.Err != nil {
+				return resp.Err
+			}
+		}
 		a, err := client.Cmd("SCAN", cursor, "count", "10000").Array()
 		if err != nil {
 			return err
