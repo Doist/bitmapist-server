@@ -491,8 +491,8 @@ func (s *Server) handleSlurp(req red.Request) (interface{}, error) {
 			return
 		}
 		s.log.Printf("imported %d keys from redis in %v; "+
-			"skipped: %d due to error, %d non-strings, %d zero-only bitmaps",
-			stats.Imported, time.Since(begin), stats.Errors, stats.NonStr, stats.Zero)
+			"skipped: %d non-strings, %d zero-only bitmaps",
+			stats.Imported, time.Since(begin), stats.NonStr, stats.Zero)
 	}()
 	return resp.OK, nil
 }
@@ -1037,7 +1037,7 @@ func (s *Server) Backup(w io.Writer) error {
 }
 
 type importStats struct {
-	Imported, Errors, NonStr, Zero int
+	Imported, NonStr, Zero int
 }
 
 func (s *Server) redisImport(addr string, db int) (*importStats, error) {
@@ -1083,15 +1083,10 @@ func (s *Server) redisImport(addr string, db int) (*importStats, error) {
 			if resp.Err != nil {
 				if resp.IsType(redis.AppErr) {
 					s.log.Printf("skip load of key %q: %v", key, resp.Err)
-					stats.Errors++
+					stats.NonStr++
 					continue
 				}
 				return nil, resp.Err
-			}
-			if !resp.IsType(redis.BulkStr) {
-				s.log.Printf("skip load of key %q: not a string", key)
-				stats.NonStr++
-				continue
 			}
 			data, err := resp.Bytes()
 			if err != nil {
