@@ -471,27 +471,28 @@ func (s *Server) persist() error {
 }
 
 func (s *Server) handleSlurp(req red.Request) (interface{}, error) {
-	if len(req.Args) != 1 && len(req.Args) != 2 {
+	if l := len(req.Args); l != 1 && l != 2 {
 		return nil, red.ErrWrongArgs
 	}
 	addr := req.Args[0]
 	db := 0
 	if len(req.Args) == 2 {
-		var parseError error
-		db, parseError = strconv.Atoi(req.Args[1])
-		if parseError != nil {
-			return nil, red.ErrWrongArgs
+		var err error
+		if db, err = strconv.Atoi(req.Args[1]); err != nil {
+			return nil, err
 		}
 	}
 	go func() {
 		s.log.Printf("importing redis dataset from %v db %d", addr, db)
 		begin := time.Now()
-		numImported, numErr, numNonStr, numZero, err := s.redisImport(addr, db)
+		stats, err := s.redisImport(addr, db)
 		if err != nil {
 			s.log.Println("redis import error:", err)
 			return
 		}
-		s.log.Printf("Imported %d keys from redis in %v. Skipped: %d due to error, %d non-strings, %d zero-only bitmaps.", numImported, time.Since(begin), numErr, numNonStr, numZero)
+		s.log.Printf("imported %d keys from redis in %v; "+
+			"skipped: %d due to error, %d non-strings, %d zero-only bitmaps",
+			stats.Imported, time.Since(begin), stats.Errors, stats.NonStr, stats.Zero)
 	}()
 	return resp.OK, nil
 }
@@ -1035,40 +1036,44 @@ func (s *Server) Backup(w io.Writer) error {
 	})
 }
 
-func (s *Server) redisImport(addr string, db int) (int, int, int, int, error) {
+type importStats struct {
+	Imported, Errors, NonStr, Zero int
+}
+
+func (s *Server) redisImport(addr string, db int) (*importStats, error) {
 	client, err := redis.Dial("tcp", addr)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return nil, err
 	}
 	defer client.Close()
 	if db != 0 {
 		resp := client.Cmd("SELECT", db)
 		if resp.Err != nil {
-			return 0, 0, 0, 0, resp.Err
+			return nil, resp.Err
 		}
 	}
-	var numImported, numErr, numNonStr, numZero int
+	var stats importStats
 	var vals []uint32
 	var done bool
 	cursor := "0"
 	for !done {
 		a, err := client.Cmd("SCAN", cursor, "count", "10000").Array()
 		if err != nil {
-			return numImported, numErr, numNonStr, numZero, err
+			return nil, err
 		}
 		if len(a) != 2 {
-			return numImported, numErr, numNonStr, numZero, fmt.Errorf("bad response array length: %d", len(a))
+			return nil, fmt.Errorf("bad response array length: %d", len(a))
 		}
 		cursor, err = a[0].Str()
 		if err != nil {
-			return numImported, numErr, numNonStr, numZero, err
+			return nil, err
 		}
 		if cursor == "0" {
 			done = true
 		}
 		keys, err := a[1].List()
 		if err != nil {
-			return numImported, numErr, numNonStr, numZero, err
+			return nil, err
 		}
 		for _, key := range keys {
 			if key == "" {
@@ -1078,19 +1083,19 @@ func (s *Server) redisImport(addr string, db int) (int, int, int, int, error) {
 			if resp.Err != nil {
 				if resp.IsType(redis.AppErr) {
 					s.log.Printf("skip load of key %q: %v", key, resp.Err)
-					numErr++
+					stats.Errors++
 					continue
 				}
-				return numImported, numErr, numNonStr, numZero, resp.Err
+				return nil, resp.Err
 			}
 			if !resp.IsType(redis.BulkStr) {
 				s.log.Printf("skip load of key %q: not a string", key)
-				numNonStr++
+				stats.NonStr++
 				continue
 			}
 			data, err := resp.Bytes()
 			if err != nil {
-				return numImported, numErr, numNonStr, numZero, err
+				return nil, err
 			}
 			vals = vals[:0]
 			for i, b := range data {
@@ -1104,7 +1109,7 @@ func (s *Server) redisImport(addr string, db int) (int, int, int, int, error) {
 				}
 			}
 			if len(vals) == 0 {
-				numZero++
+				stats.Zero++
 				continue
 			}
 			v := cacheItem{
@@ -1116,10 +1121,10 @@ func (s *Server) redisImport(addr string, db int) (int, int, int, int, error) {
 			s.keys[key] = struct{}{}
 			s.cache[key] = v
 			s.mu.Unlock()
-			numImported++
+			stats.Imported++
 		}
 	}
-	return numImported, numErr, numNonStr, numZero, nil
+	return &stats, nil
 }
 
 func handleSelect(r red.Request) (interface{}, error) {
