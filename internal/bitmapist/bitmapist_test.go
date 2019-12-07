@@ -91,6 +91,7 @@ func TestServer(t *testing.T) {
 }
 
 func checkResponse(t testing.TB, req string, respWanted interface{}, rd resp.BytesReader, wr io.Writer) {
+	t.Helper()
 	if err := resp.Encode(wr, strings.Fields(req)); err != nil {
 		t.Fatal(err)
 	}

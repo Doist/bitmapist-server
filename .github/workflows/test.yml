@@ -1,0 +1,19 @@
+name: Test suite
+on: [push]
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/setup-go@v1
+      with:
+        go-version: '1.13.5'
+    - uses: actions/checkout@v1
+    - name: Get dependencies
+      run: go mod download
+    - name: Run tests (without redis)
+      run: go test -timeout=3m -race ./...
+    - name: Install redis
+      run: sudo apt-get install -y -qq redis-server
+    - name: Run tests (with redis installed)
+      run: go test -count=1 -timeout=3m -v -race ./...

@@ -1,0 +1,55 @@
+name: Publish Docker image
+on:
+  push:
+    tags:
+      - v*
+
+env:
+  IMAGE_NAME: bitmapist-server
+
+jobs:
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/setup-go@v1
+      with:
+        go-version: '1.13.5'
+    - uses: actions/checkout@v1
+    - name: Get dependencies
+      run: go mod download
+    - name: Install redis
+      run: sudo apt-get install -y -qq redis-server
+    - name: Run tests
+      run: go test -v -race ./...
+  push:
+    needs: test
+    name: Build and push Docker image
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+    - uses: actions/checkout@v1
+    - name: Build image
+      run: docker build . --tag image
+    - name: Log into registry
+      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${GITHUB_ACTOR} --password-stdin
+    - name: Push image
+      run: |
+        set -u
+        # https://help.github.com/en/actions/automating-your-workflow-with-github-actions/using-environment-variables
+        IMAGE_ID=docker.pkg.github.com/doist/$IMAGE_NAME/$IMAGE_NAME
+
+         # Strip git ref prefix from version
+        VERSION=${GITHUB_REF##*/}
+
+        # Strip "v" prefix from tag name
+        case "${GITHUB_REF}" in refs/tags/*) VERSION=${VERSION#v} ;; esac
+
+        case "$VERSION" in master) VERSION=latest ;; esac
+
+        echo IMAGE_ID=$IMAGE_ID
+        echo VERSION=$VERSION
+        echo GITHUB_REF=$GITHUB_REF
+
+        docker tag image $IMAGE_ID:$VERSION
+        docker push $IMAGE_ID:$VERSION
