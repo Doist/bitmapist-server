@@ -14,7 +14,7 @@ jobs:
     steps:
     - uses: actions/setup-go@v1
       with:
-        go-version: '1.13.5'
+        go-version: '1.x'
     - uses: actions/checkout@v1
     - name: Get dependencies
       run: go mod download
