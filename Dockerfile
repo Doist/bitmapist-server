@@ -5,7 +5,11 @@ ENV GOPROXY=https://proxy.golang.org CGO_ENABLED=0
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . ./
-RUN go build -ldflags='-s -w' -o bitmapist-server && upx --lzma bitmapist-server
+RUN test -s ci-version.txt && \
+    go build -ldflags='-s -w' -o bitmapist-server \
+        -ldflags="-X=main.explicitVersion=$(cat ci-version.txt)" || \
+    go build -ldflags='-s -w' -o bitmapist-server \
+    && upx --lzma bitmapist-server
 
 FROM scratch
 COPY --from=builder /app/bitmapist-server .

@@ -30,7 +30,9 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: Build image
-      run: docker build . --tag image
+      run: |
+        echo ${GITHUB_REF##*/} | tee ci-version.txt
+        docker build . --tag image
     - name: Log into registry
       run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${GITHUB_ACTOR} --password-stdin
     - name: Push image

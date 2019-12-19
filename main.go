@@ -3,11 +3,13 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -15,6 +17,8 @@ import (
 	"github.com/artyom/autoflags"
 	"github.com/artyom/red"
 )
+
+var explicitVersion string // to be set by CI with -ldflags="-X=main.explicitVersion=v1.2.3"
 
 func main() {
 	args := struct {
@@ -27,7 +31,21 @@ func main() {
 		File: "bitmapist.db",
 	}
 	autoflags.Define(&args)
+	var versionOnly bool
+	flag.BoolVar(&versionOnly, "v", versionOnly, "print version and exit")
+	flag.BoolVar(&versionOnly, "version", versionOnly, "print version and exit")
 	flag.Parse()
+	if versionOnly || (len(os.Args) == 2 && os.Args[1] == "version") {
+		v := "unknown"
+		if explicitVersion != "" {
+			v = explicitVersion
+		} else if bi, ok := debug.ReadBuildInfo(); ok {
+			v = bi.Main.Version
+		}
+		fmt.Printf("bitmapist-server %s\n", v)
+		return
+	}
+
 	log := log.New(os.Stderr, "", log.LstdFlags)
 
 	log.Println("loading data from", args.File)
