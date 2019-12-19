@@ -90,6 +90,15 @@ func TestServer(t *testing.T) {
 	checkResponse(t, "getbit dst_rename 1", int64(1), rd, conn)
 }
 
+func TestServer_handleKeys(t *testing.T) {
+	cf, cleanup := newServer(t)
+	defer cleanup()
+	conn := cf()
+	defer conn.Close()
+	rd := bufio.NewReader(conn)
+	checkResponse(t, "keys foo*", resp.Array{}, rd, conn)
+}
+
 func checkResponse(t testing.TB, req string, respWanted interface{}, rd resp.BytesReader, wr io.Writer) {
 	t.Helper()
 	if err := resp.Encode(wr, strings.Fields(req)); err != nil {

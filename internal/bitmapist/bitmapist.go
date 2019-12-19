@@ -810,7 +810,7 @@ func (s *Server) contains(key string, offset uint32) (bool, error) {
 func (s *Server) matchingKeys(pattern string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var keys []string
+	keys := []string{}
 	for k := range s.keys {
 		ok, err := filepath.Match(pattern, k)
 		if err != nil {
