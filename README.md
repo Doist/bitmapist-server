@@ -10,9 +10,18 @@ Memory in use reported by Redis (matches RSS of the redis-server process): 129.4
 
 With the same dataset migrated to standalone bitmapist server under the same load: RSS reported at about 300M.
 
-## Installation
+## Installation on Linux
 
-You'd need [Go](https://golang.org/dl/) to build the server. To build bitmapist server:
+You can download the latest version of bitmapist-server from the [Releases GitHub page](https://github.com/Doist/bitmapist-server/releases). Then unpack the server and run the binary
+
+    
+    tar xf bitmapist-server-linux-amd64.tar.gz
+    ./bitmapist-server
+
+
+## Installation on all platforms
+
+If you use a platform, other than Linux, or want to build the package from source you need [Go](https://golang.org/dl/) for this. To build bitmapist server:
 
     cd bitmapist-server # directory you've cloned repository
     go build
@@ -34,6 +43,7 @@ Service mmaps its database so it is not safe to copy the database while the proc
 You may need to migrate data from already running Redis instance; to do so, issue a special command over Redis protocol: `slurp host:port [db]` where `host`, `port` and `db` specify the address and optionally the number of the running Redis database to import. Note that all string keys would be imported from this Redis instance, it's expected that instance is only used for bitmapist data.
 
 Special command `info keys` displays the total number of keys in the database and number of cached (hot) keys.
+
 
 ## Caveats
 
