@@ -2,7 +2,7 @@ module github.com/Doist/bitmapist-server
 
 require (
 	github.com/RoaringBitmap/roaring v0.4.21
-	github.com/artyom/autoflags v1.1.0
+	github.com/artyom/autoflags v1.1.1
 	github.com/artyom/red v0.0.0-20170208121325-d6616c8bb9ec
 	github.com/artyom/resp v1.0.0
 	github.com/boltdb/bolt v1.3.1
