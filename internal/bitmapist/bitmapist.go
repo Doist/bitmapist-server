@@ -20,9 +20,9 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/artyom/red"
 	"github.com/artyom/resp"
-	"github.com/boltdb/bolt"
 	"github.com/golang/snappy"
 	"github.com/mediocregopher/radix.v2/redis"
+	bolt "go.etcd.io/bbolt"
 )
 
 // New returns initialized Server that loads/saves its data in dbFile
