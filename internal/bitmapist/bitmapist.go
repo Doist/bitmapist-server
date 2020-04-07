@@ -26,8 +26,8 @@ import (
 )
 
 // New returns initialized Server that loads/saves its data in dbFile
-func New(dbFile string) (*Server, error) {
-	db, err := bolt.Open(dbFile, 0644, &bolt.Options{Timeout: time.Second})
+func New(dbFile string, readOnly bool) (*Server, error) {
+	db, err := bolt.Open(dbFile, 0644, &bolt.Options{Timeout: time.Second, ReadOnly: readOnly})
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,12 @@ func New(dbFile string) (*Server, error) {
 		s.db.Close()
 		return nil, err
 	}
-	go s.loop()
+	switch {
+	case readOnly:
+		close(s.doneAck) // to unblock Shutdown
+	default:
+		go s.loop()
+	}
 	return s, nil
 }
 

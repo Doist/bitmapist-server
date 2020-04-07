@@ -22,10 +22,11 @@ var explicitVersion string // to be set by CI with -ldflags="-X=main.explicitVer
 
 func main() {
 	args := struct {
-		Addr string `flag:"addr,address to listen"`
-		File string `flag:"db,path to database file"`
-		Bak  string `flag:"bak,file to save backup to on SIGUSR1"`
-		Dbg  bool   `flag:"debug,log incoming commands"`
+		Addr     string `flag:"addr,address to listen"`
+		File     string `flag:"db,path to database file"`
+		Bak      string `flag:"bak,file to save backup to on SIGUSR1"`
+		Dbg      bool   `flag:"debug,log incoming commands"`
+		ReadOnly bool   `flag:"readonly,open database in read only mode (also disables backup)"`
 	}{
 		Addr: "localhost:6379",
 		File: "bitmapist.db",
@@ -50,7 +51,7 @@ func main() {
 
 	log.Println("loading data from", args.File)
 	begin := time.Now()
-	s, err := bitmapist.New(args.File)
+	s, err := bitmapist.New(args.File, args.ReadOnly)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func main() {
 		}
 		os.Exit(0)
 	}()
-	if args.Bak != "" && args.Bak != args.File {
+	if !args.ReadOnly && args.Bak != "" && args.Bak != args.File {
 		go func() {
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, syscall.SIGUSR1)

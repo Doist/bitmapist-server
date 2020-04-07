@@ -120,7 +120,7 @@ func newServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
 		t.Fatal(err)
 		return
 	}
-	srv, err := New(filepath.Join(td, "temp.db"))
+	srv, err := New(filepath.Join(td, "temp.db"), false)
 	if err != nil {
 		os.RemoveAll(td)
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestServerPersistence(t *testing.T) {
 	}
 	defer os.RemoveAll(td)
 	newServerDirectory := func(t testing.TB) (fn clientConnFunc, cleanup func()) {
-		srv, err := New(filepath.Join(td, "temp.db"))
+		srv, err := New(filepath.Join(td, "temp.db"), false)
 		if err != nil {
 			t.Fatal(err)
 			return
