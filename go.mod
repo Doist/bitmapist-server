@@ -8,7 +8,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/golang/snappy v0.0.1
 	github.com/mediocregopher/radix.v2 v0.0.0-20180603022615-94360be26253
-	go.etcd.io/bbolt v1.3.4
+	go.etcd.io/bbolt v1.3.5
 )
 
 go 1.13
