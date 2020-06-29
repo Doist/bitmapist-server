@@ -103,6 +103,7 @@ func (s *Server) Register(srv *red.Server) {
 	srv.Handle("scan", s.handleScan)
 	srv.Handle("info", s.handleInfo)
 	srv.Handle("select", handleSelect)
+	srv.Handle("ping", handlePing)
 	srv.Handle("ttl", s.handleTTL)
 	srv.Handle("pttl", s.handlePTTL)
 	srv.Handle("expire", s.handleExpire)
@@ -1132,6 +1133,16 @@ func handleSelect(r red.Request) (interface{}, error) {
 	default:
 		return nil, errors.New("invalid DB index")
 	}
+}
+
+func handlePing(r red.Request) (interface{}, error) {
+	if len(r.Args) > 1 {
+		return nil, red.ErrWrongArgs
+	}
+	if len(r.Args) == 0 {
+		return "PONG", nil
+	}
+	return r.Args[0], nil
 }
 
 // Logger is a set of methods used to log information. *log.Logger implements

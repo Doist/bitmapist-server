@@ -28,6 +28,8 @@ func TestAgainstRedis(t *testing.T) {
 	defer cleanupRedis()
 
 	cmds := []string{
+		"ping",
+		"ping hello",
 		"multi",
 		"setbit foo 10 1",
 		"setbit foo 7 1",
