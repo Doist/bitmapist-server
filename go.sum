@@ -1,5 +1,6 @@
 github.com/RoaringBitmap/roaring v0.5.2 h1:Y67H/IOsfb6HRuMk0angG6MfG0LPrdHKwRXxu1p1wYw=
 github.com/RoaringBitmap/roaring v0.5.2/go.mod h1:puNo5VdzwbaIQxSiDIwfXl4Hnc+fbovcX4IW/dSTtUk=
+github.com/RoaringBitmap/roaring v0.5.3/go.mod h1:puNo5VdzwbaIQxSiDIwfXl4Hnc+fbovcX4IW/dSTtUk=
 github.com/artyom/autoflags v1.1.1 h1:8flRmpb7xpjLHFVcM+HN+cEEKLw+H5a2hABDbRvfG9A=
 github.com/artyom/autoflags v1.1.1/go.mod h1:Th9KgAVvFcYp7t8b//Pu21xHjExLpzr4SXCbwVbHL7Y=
 github.com/artyom/red v0.0.0-20170208121325-d6616c8bb9ec h1:QZeKfanvuWoZJ/bh8HcOh+dVTVMQvcQuHOIlgd5OjQ8=
