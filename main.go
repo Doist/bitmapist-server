@@ -47,6 +47,9 @@ func main() {
 	}
 
 	log := log.New(os.Stderr, "", log.LstdFlags)
+	if os.Getppid() == 1 && os.Getenv("INVOCATION_ID") != "" {
+		log.SetFlags(0) // systemd takes care of log line timestamps
+	}
 
 	log.Println("loading data from", args.File)
 	begin := time.Now()
