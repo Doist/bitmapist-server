@@ -1,15 +1,13 @@
 FROM golang:alpine AS builder
-RUN apk add --update upx
 WORKDIR /app
 ENV GOPROXY=https://proxy.golang.org CGO_ENABLED=0
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . ./
 RUN test -s ci-version.txt && \
-    go build -ldflags='-s -w' -o bitmapist-server \
+    go build -trimpath -ldflags='-s -w' -o bitmapist-server \
         -ldflags="-X=main.explicitVersion=$(cat ci-version.txt)" || \
-    go build -ldflags='-s -w' -o bitmapist-server \
-    && upx --lzma bitmapist-server
+    go build -trimpath -ldflags='-s -w' -o bitmapist-server
 
 FROM scratch
 COPY --from=builder /app/bitmapist-server .
