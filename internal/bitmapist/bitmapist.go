@@ -54,7 +54,9 @@ func New(dbFile string) (*Server, error) {
 					return nil
 				}
 				if err != nil {
-					s.keys = make(map[string]struct{})
+					for k := range s.keys {
+						delete(s.keys, k)
+					}
 					break
 				}
 				s.keys[k] = struct{}{}
@@ -346,7 +348,9 @@ func (s *Server) persist() error {
 	for k := range s.rm {
 		toPurge = append(toPurge, k)
 	}
-	s.rm = make(map[string]struct{})
+	for k := range s.rm {
+		delete(s.rm, k)
+	}
 	s.mu.Unlock()
 	if len(toPurge) > 0 {
 		err := s.db.Update(func(tx *bolt.Tx) error {
