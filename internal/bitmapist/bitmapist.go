@@ -74,6 +74,9 @@ func New(dbFile string) (*Server, error) {
 	if s.stDelete, err = db.Prepare(`DELETE FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`); err != nil {
 		return nil, err
 	}
+	if s.stDeleteExpired, err = db.Prepare(`DELETE FROM bitmaps WHERE expireat!=0 && expireat<?`); err != nil {
+		return nil, err
+	}
 	defuseClose = true
 	return s, nil
 }
@@ -129,6 +132,7 @@ type Server struct {
 	stInfo            *sql.Stmt
 	stMatchingKeys    *sql.Stmt
 	stDelete          *sql.Stmt
+	stDeleteExpired   *sql.Stmt
 }
 
 func (s *Server) exists(key string) bool {
@@ -183,16 +187,6 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 	default:
 		return nil, err
 	}
-}
-
-func (s *Server) sweepExpired() error {
-	now := time.Now().UnixNano()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond) // TODO
-	defer cancel()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.db.ExecContext(ctx, `DELETE FROM bitmaps WHERE expireat!=0 && expireat<?`, now)
-	return err
 }
 
 func (s *Server) handleSlurp(req red.Request) (interface{}, error) {
@@ -709,6 +703,7 @@ func (s *Server) delete(withLock bool, keys ...string) (int, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 	}
+	_, _ = s.stDeleteExpired.Exec(nanos)
 	if len(keys) == 1 { // most common case
 		res, err := s.stDelete.Exec(keys[0], nanos)
 		if err != nil {
