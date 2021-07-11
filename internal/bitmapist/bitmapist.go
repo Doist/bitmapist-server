@@ -24,18 +24,57 @@ import (
 
 // New returns initialized Server that loads/saves its data in dbFile
 func New(dbFile string) (*Server, error) {
-	db2, err := sql.Open("sqlite", dbFile)
+	var defuseClose bool
+	db, err := sql.Open("sqlite", dbFile)
 	if err != nil {
 		return nil, err
 	}
-	if err := initSchema(context.Background(), db2); err != nil {
-		db2.Close()
+	defer func() {
+		if !defuseClose {
+			db.Close()
+		}
+	}()
+	if err := initSchema(context.Background(), db); err != nil {
 		return nil, err
 	}
 	s := &Server{
-		db:  db2,
+		db:  db,
 		log: noopLogger{},
 	}
+	if s.stExistsQuery, err = db.Prepare(`SELECT 1 FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`); err != nil {
+		return nil, err
+	}
+	if s.stPutBitmap1, err = db.Prepare(`INSERT OR REPLACE INTO bitmaps(name,bytes) VALUES(?,?)`); err != nil {
+		return nil, err
+	}
+	if s.stPutBitmap2, err = db.Prepare(`INSERT INTO bitmaps(name,bytes) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET bytes=excluded.bytes`); err != nil {
+		return nil, err
+	}
+	if s.stGetBitmapSelect, err = db.Prepare(`SELECT bytes FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`); err != nil {
+		return nil, err
+	}
+	if s.stGetBitmapInsert, err = db.Prepare(`INSERT INTO bitmaps(name,bytes) VALUES(?,?)`); err != nil {
+		return nil, err
+	}
+	if s.stKeyTTLnanos, err = db.Prepare(`SELECT expireat FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`); err != nil {
+		return nil, err
+	}
+	if s.stExpireKey, err = db.Prepare(`UPDATE bitmaps SET expireat=@newexpire WHERE name=@name AND (expireat=0 OR expireat>@now)`); err != nil {
+		return nil, err
+	}
+	if s.stRename, err = db.Prepare(`UPDATE OR REPLACE bitmaps SET name=@newname WHERE name=@oldname`); err != nil {
+		return nil, err
+	}
+	if s.stInfo, err = db.Prepare(`SELECT count(*) FROM bitmaps WHERE expireat=0 OR expireat>?`); err != nil {
+		return nil, err
+	}
+	if s.stMatchingKeys, err = db.Prepare(`SELECT name FROM bitmaps WHERE name GLOB ? AND (expireat=0 OR expireat>?)`); err != nil {
+		return nil, err
+	}
+	if s.stDelete, err = db.Prepare(`DELETE FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`); err != nil {
+		return nil, err
+	}
+	defuseClose = true
 	return s, nil
 }
 
@@ -78,13 +117,26 @@ type Server struct {
 	db  *sql.DB
 	log Logger
 	mu  sync.Mutex
+
+	stExistsQuery     *sql.Stmt
+	stPutBitmap1      *sql.Stmt
+	stPutBitmap2      *sql.Stmt
+	stGetBitmapSelect *sql.Stmt
+	stGetBitmapInsert *sql.Stmt
+	stKeyTTLnanos     *sql.Stmt
+	stExpireKey       *sql.Stmt
+	stRename          *sql.Stmt
+	stInfo            *sql.Stmt
+	stMatchingKeys    *sql.Stmt
+	stDelete          *sql.Stmt
 }
 
 func (s *Server) exists(key string) bool {
+	nanos := time.Now().UnixNano()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var sink int
-	_ = s.db.QueryRowContext(context.Background(), `SELECT 1 FROM bitmaps WHERE name=?`, key).Scan(&sink)
+	_ = s.stExistsQuery.QueryRow(key, nanos).Scan(sink)
 	return sink == 1
 }
 
@@ -97,13 +149,11 @@ func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap, keepEx
 	if err != nil {
 		return err
 	}
-	const query1 = `INSERT OR REPLACE INTO bitmaps(name,bytes) VALUES(?,?)`
-	const query2 = `INSERT INTO bitmaps(name,bytes) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET bytes=excluded.bytes`
-	query := query1
+	st := s.stPutBitmap1
 	if keepExpire {
-		query = query2
+		st = s.stPutBitmap2
 	}
-	_, err = s.db.ExecContext(context.Background(), query, key, buf)
+	_, err = st.Exec(key, buf)
 	return err
 }
 
@@ -111,8 +161,7 @@ func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap, keepEx
 func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, error) {
 	nanots := time.Now().UnixNano()
 	var buf []byte
-	const query1 = `SELECT bytes FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`
-	switch err := s.db.QueryRowContext(context.Background(), query1, key, nanots).Scan(&buf); err {
+	switch err := s.stGetBitmapSelect.QueryRow(key, nanots).Scan(&buf); err {
 	case nil:
 		bmap := new(roaring.Bitmap)
 		if err = bmap.UnmarshalBinary(buf); err != nil {
@@ -127,8 +176,7 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 		if buf, err = bmap.MarshalBinary(); err != nil {
 			return nil, err
 		}
-		_, err = s.db.ExecContext(context.Background(), `INSERT INTO bitmaps(name,bytes) VALUES(?,?)`, key, buf)
-		if err != nil {
+		if _, err = s.stGetBitmapInsert.Exec(key, buf); err != nil {
 			return nil, err
 		}
 		return bmap, nil
@@ -222,8 +270,7 @@ func (s *Server) keyTTLnanos(key string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var expireat int64
-	const query = `SELECT expireat FROM bitmaps WHERE name=? AND expireat=0 OR expireat>?`
-	if err := s.db.QueryRowContext(context.Background(), query, key, nownanos).Scan(&expireat); err != nil {
+	if err := s.stKeyTTLnanos.QueryRow(key, nownanos).Scan(&expireat); err != nil {
 		if err == sql.ErrNoRows {
 			return -2, nil
 		}
@@ -250,8 +297,7 @@ func (s *Server) expireKey(key string, diff time.Duration) (int64, error) {
 	}
 	now := time.Now()
 	nanots := now.UnixNano()
-	const query = `UPDATE bitmaps SET expireat=@newexpire WHERE name=@name AND (expireat=0 OR (expireat!=0 AND expireat>@now))`
-	res, err := s.db.ExecContext(context.Background(), query,
+	res, err := s.stExpireKey.Exec(
 		sql.Named("name", key),
 		sql.Named("newexpire", now.Add(diff).UnixNano()),
 		sql.Named("now", nanots),
@@ -383,8 +429,7 @@ func (s *Server) handleRename(r red.Request) (interface{}, error) {
 	errNoKey := errors.New("no such key")
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	const query = `UPDATE OR REPLACE bitmaps SET name=@newname WHERE name=@oldname`
-	res, err := s.db.ExecContext(context.Background(), query, sql.Named("oldname", src), sql.Named("newname", dst))
+	res, err := s.stRename.Exec(sql.Named("oldname", src), sql.Named("newname", dst))
 	if err != nil {
 		return nil, err
 	}
@@ -417,8 +462,7 @@ func (s *Server) handleInfo(r red.Request) (interface{}, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var cnt int
-	const query = `SELECT count(*) FROM bitmaps WHERE expireat=0 OR expireat>?`
-	if err := s.db.QueryRowContext(context.Background(), query, time.Now().UnixNano()).Scan(&cnt); err != nil {
+	if err := s.stInfo.QueryRow(time.Now().UnixNano()).Scan(&cnt); err != nil {
 		return nil, err
 	}
 	buf := new(bytes.Buffer)
@@ -491,8 +535,7 @@ func (s *Server) matchingKeys(pattern string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	keys := []string{}
-	const query = `SELECT name FROM bitmaps WHERE name GLOB ? AND (expireat=0 OR expireat > ?)`
-	rows, err := s.db.QueryContext(context.Background(), query, pattern, time.Now().UnixNano())
+	rows, err := s.stMatchingKeys.Query(pattern, time.Now().UnixNano())
 	if err != nil {
 		return nil, err
 	}
@@ -661,23 +704,29 @@ func (s *Server) delete(withLock bool, keys ...string) (int, error) {
 	if len(keys) == 0 {
 		return 0, nil
 	}
+	nanos := time.Now().UnixNano()
 	if withLock {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 	}
-	// TODO common case for a single key w/o explicit TX
+	if len(keys) == 1 { // most common case
+		res, err := s.stDelete.Exec(keys[0], nanos)
+		if err != nil {
+			return 0, err
+		}
+		n, err := res.RowsAffected()
+		return int(n), err
+	}
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	st, err := tx.PrepareContext(context.Background(), `DELETE FROM bitmaps WHERE name=?`)
-	if err != nil {
-		return 0, err
-	}
+	st := tx.Stmt(s.stDelete)
+	defer st.Close()
 	var cnt int
 	for _, k := range keys {
-		res, err := st.ExecContext(context.Background(), k)
+		res, err := st.Exec(k, nanos)
 		if err != nil {
 			return 0, err
 		}
