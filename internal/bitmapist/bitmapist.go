@@ -238,7 +238,7 @@ func (s *Server) handleTTL(req red.Request) (interface{}, error) {
 	if v < 0 {
 		return v, nil
 	}
-	d := time.Duration(v).Round(time.Millisecond)
+	d := time.Duration(v).Round(time.Second)
 	return int64(d.Seconds()), nil
 }
 
