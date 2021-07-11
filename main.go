@@ -4,7 +4,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/signal"
@@ -82,9 +81,10 @@ func main() {
 			signal.Notify(sigCh, syscall.SIGUSR1)
 			for range sigCh {
 				log.Printf("backing up database to %q", args.Bak)
+				begin := time.Now()
 				switch err := doBackup(s, args.Bak); err {
 				case nil:
-					log.Println("backup successfully saved")
+					log.Printf("backup successfully saved in %v", time.Since(begin).Round(500*time.Millisecond))
 				default:
 					log.Println("error doing backup:", err)
 				}
@@ -97,20 +97,14 @@ func main() {
 // doBackup creates temporary file, calls s.Backup on it and renames temporary
 // file to dst if backup completed successfully.
 func doBackup(s *bitmapist.Server, dst string) error {
-	f, err := ioutil.TempFile(filepath.Dir(dst), "bitmapist-backup-")
+	dir, err := os.MkdirTemp(filepath.Dir(dst), "bitmapist-backup-")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	defer os.Remove(f.Name())
-	if err := s.Backup(f); err != nil {
+	defer os.RemoveAll(dir)
+	name := filepath.Join(dir, "dump.db")
+	if err := s.Backup(name); err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(f.Name(), 0644); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), dst)
+	return os.Rename(name, dst)
 }

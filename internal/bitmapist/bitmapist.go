@@ -9,7 +9,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -791,11 +790,15 @@ func revbits(b byte) byte {
 	return b
 }
 
-// Backup writes current on-disk saved database to Writer w. It's not safe to
-// copy database file while it's used, so this method can be used to get
-// a consistent copy of database.
-func (s *Server) Backup(w io.Writer) error {
-	return errors.New("not implemented") // TODO
+// Backup writes copy of the database to a new file. It's not safe to copy
+// database file while it's used, so this method can be used to get a
+// consistent copy of database.
+func (s *Server) Backup(name string) error {
+	if name == "" {
+		return errors.New("name cannot be empty")
+	}
+	_, err := s.db.Exec(`VACUUM INTO ?`, name)
+	return err
 }
 
 type importStats struct {
