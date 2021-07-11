@@ -75,7 +75,7 @@ func (s *Server) Shutdown() error {
 // run on top of github.com/artyom/red.Server which handles redis protocol-level
 // details and networking.
 type Server struct {
-	db  *sql.DB // TODO rename db2 -> db once the old "db" is dropped
+	db  *sql.DB
 	log Logger
 	mu  sync.Mutex
 }
@@ -88,14 +88,14 @@ func (s *Server) exists(key string) bool {
 	return sink == 1
 }
 
-func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap, keepExpire bool) {
+func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap, keepExpire bool) error {
 	if withLock {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 	}
 	buf, err := bm.MarshalBinary()
 	if err != nil {
-		panic(err) // TODO
+		return err
 	}
 	const query1 = `INSERT OR REPLACE INTO bitmaps(name,bytes) VALUES(?,?)`
 	const query2 = `INSERT INTO bitmaps(name,bytes) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET bytes=excluded.bytes`
@@ -103,11 +103,8 @@ func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap, keepEx
 	if keepExpire {
 		query = query2
 	}
-	// log.Printf("putBitmap: query: %q", query) // FIXME
 	_, err = s.db.ExecContext(context.Background(), query, key, buf)
-	if err != nil {
-		panic(err) // TODO
-	}
+	return err
 }
 
 // getBitmap works on an already locked server!
@@ -117,7 +114,6 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 	const query1 = `SELECT bytes FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`
 	switch err := s.db.QueryRowContext(context.Background(), query1, key, nanots).Scan(&buf); err {
 	case nil:
-		// log.Println("getBitmap: got bitmap case") // FIXME
 		bmap := new(roaring.Bitmap)
 		if err = bmap.UnmarshalBinary(buf); err != nil {
 			return nil, err
@@ -131,7 +127,6 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 		if buf, err = bmap.MarshalBinary(); err != nil {
 			return nil, err
 		}
-		// log.Println("getBitmap, case: no bitmap, creating/inserting one") // FIXME
 		_, err = s.db.ExecContext(context.Background(), `INSERT INTO bitmaps(name,bytes) VALUES(?,?)`, key, buf)
 		if err != nil {
 			return nil, err
@@ -248,7 +243,9 @@ func (s *Server) expireKey(key string, diff time.Duration) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if diff <= 0 {
-		s.delete(false, key)
+		if _, err := s.delete(false, key); err != nil {
+			return 0, err
+		}
 		return 1, nil
 	}
 	now := time.Now()
@@ -283,7 +280,9 @@ func (s *Server) handleSet(req red.Request) (interface{}, error) {
 	if len(req.Args) != 2 {
 		return nil, red.ErrWrongArgs
 	}
-	s.setFromBytes(req.Args[0], []byte(req.Args[1]))
+	if err := s.setFromBytes(req.Args[0], []byte(req.Args[1])); err != nil {
+		return nil, err
+	}
 	return resp.OK, nil
 }
 
@@ -298,7 +297,8 @@ func (s *Server) handleDel(r red.Request) (interface{}, error) {
 	if len(r.Args) < 1 {
 		return nil, red.ErrWrongArgs
 	}
-	return int64(s.delete(true, r.Args...)), nil
+	n, err := s.delete(true, r.Args...)
+	return int64(n), err
 }
 
 func (s *Server) handleExists(r red.Request) (interface{}, error) {
@@ -451,7 +451,9 @@ func (s *Server) setBit(key string, offset uint32) (bool, error) {
 		bm = roaring.NewBitmap()
 	}
 	x := bm.CheckedAdd(offset)
-	s.putBitmap(false, key, bm, true)
+	if err := s.putBitmap(false, key, bm, true); err != nil {
+		return false, err
+	}
 	return x, nil
 }
 
@@ -466,7 +468,9 @@ func (s *Server) clearBit(key string, offset uint32) (bool, error) {
 		bm = roaring.NewBitmap()
 	}
 	x := bm.CheckedRemove(offset)
-	s.putBitmap(false, key, bm, true)
+	if err := s.putBitmap(false, key, bm, true); err != nil {
+		return false, err
+	}
 	return x, nil
 }
 
@@ -535,17 +539,23 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 		if len(src) > 0 {
 			// mix of found and missing keys, result would be empty
 			// (but set) bitmap
-			s.putBitmap(false, key, roaring.NewBitmap(), false)
+			if err := s.putBitmap(false, key, roaring.NewBitmap(), false); err != nil {
+				return 0, err
+			}
 			return 0, nil
 		}
 	}
 	if len(src) == 0 {
-		s.delete(false, key)
+		if _, err := s.delete(false, key); err != nil {
+			return 0, err
+		}
 		return 0, nil
 	}
 	xbm := roaring.FastAnd(src...)
 	max := maxValue(xbm)
-	s.putBitmap(false, key, xbm, false)
+	if err := s.putBitmap(false, key, xbm, false); err != nil {
+		return 0, err
+	}
 	sz := max / 8
 	if max%8 > 0 {
 		sz++
@@ -567,12 +577,16 @@ func (s *Server) bitopOr(key string, sources []string) (int64, error) {
 		}
 	}
 	if len(src) == 0 {
-		s.delete(false, key)
+		if _, err := s.delete(false, key); err != nil {
+			return 0, err
+		}
 		return 0, nil
 	}
 	xbm := roaring.FastOr(src...)
 	max := maxValue(xbm)
-	s.putBitmap(false, key, xbm, false)
+	if err := s.putBitmap(false, key, xbm, false); err != nil {
+		return 0, err
+	}
 	sz := max / 8
 	if max%8 > 0 {
 		sz++
@@ -598,12 +612,16 @@ func (s *Server) bitopXor(key string, sources []string) (int64, error) {
 		src = append(src, roaring.NewBitmap())
 	}
 	if !found {
-		s.delete(false, key)
+		if _, err := s.delete(false, key); err != nil {
+			return 0, err
+		}
 		return 0, nil
 	}
 	xbm := roaring.HeapXor(src...)
 	max := maxValue(xbm)
-	s.putBitmap(false, key, xbm, false)
+	if err := s.putBitmap(false, key, xbm, false); err != nil {
+		return 0, err
+	}
 	sz := max / 8
 	if max%8 > 0 {
 		sz++
@@ -619,7 +637,9 @@ func (s *Server) bitopNot(dst, src string) (int64, error) {
 		return 0, err
 	}
 	if b1 == nil {
-		s.delete(false, dst)
+		if _, err := s.delete(false, dst); err != nil {
+			return 0, err
+		}
 		return 0, nil
 	}
 	max := maxValue(b1)
@@ -631,13 +651,15 @@ func (s *Server) bitopNot(dst, src string) (int64, error) {
 		upper += (8 - x)
 	}
 	b2 := roaring.Flip(b1, 0, upper)
-	s.putBitmap(false, dst, b2, false)
+	if err := s.putBitmap(false, dst, b2, false); err != nil {
+		return 0, err
+	}
 	return int64(upper / 8), nil
 }
 
-func (s *Server) delete(withLock bool, keys ...string) int {
+func (s *Server) delete(withLock bool, keys ...string) (int, error) {
 	if len(keys) == 0 {
-		return 0
+		return 0, nil
 	}
 	if withLock {
 		s.mu.Lock()
@@ -646,30 +668,30 @@ func (s *Server) delete(withLock bool, keys ...string) int {
 	// TODO common case for a single key w/o explicit TX
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
-		panic(err) // TODO
+		return 0, err
 	}
 	defer tx.Rollback()
 	st, err := tx.PrepareContext(context.Background(), `DELETE FROM bitmaps WHERE name=?`)
 	if err != nil {
-		panic(err) // TODO
+		return 0, err
 	}
 	var cnt int
 	for _, k := range keys {
 		res, err := st.ExecContext(context.Background(), k)
 		if err != nil {
-			panic(err)
+			return 0, err
 		}
 		if n, err := res.RowsAffected(); err == nil {
 			cnt += int(n)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		panic(err) // TODO
+		return 0, err
 	}
-	return cnt
+	return cnt, nil
 }
 
-func (s *Server) setFromBytes(key string, data []byte) {
+func (s *Server) setFromBytes(key string, data []byte) error {
 	var vals []uint32
 	for i, b := range data {
 		if b == 0 {
@@ -681,7 +703,7 @@ func (s *Server) setFromBytes(key string, data []byte) {
 			}
 		}
 	}
-	s.putBitmap(true, key, roaring.BitmapOf(vals...), false)
+	return s.putBitmap(true, key, roaring.BitmapOf(vals...), false)
 }
 
 func (s *Server) bitmapBytes(key string) ([]byte, error) {
@@ -803,7 +825,9 @@ func (s *Server) redisImport(addr string, db int) (*importStats, error) {
 				stats.Zero++
 				continue
 			}
-			s.putBitmap(true, key, roaring.BitmapOf(vals...), false)
+			if err := s.putBitmap(true, key, roaring.BitmapOf(vals...), false); err != nil {
+				return nil, err
+			}
 			stats.Imported++
 		}
 	}
