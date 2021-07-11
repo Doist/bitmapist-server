@@ -1,8 +1,10 @@
-# Standalone bitmapist server
+# Standalone bitmapist server (v2)
+
+**Notice:** v2 cannot read databases created with the v1 version. Use a dedicated migration tool to convert v1 database to v2. **TODO**
 
 This is a standalone server to be used with [bitmapist library](https://github.com/Doist/bitmapist4) instead of Redis.
 
-Python bitmapist library relies on Redis bitmap operations and Redis stores bitmaps in plain byte arrays, which could become quite wasteful when you deal with big/sparse bitmaps. This standalone server implements a subset of Redis operations used by bitmapist library and relies on [compressed bitmaps representation](http://roaringbitmap.org) which saves a lot of memory. Another memory-saving technique used is only keeping *hot* dataset in memory.
+Python bitmapist library relies on Redis bitmap operations and Redis stores bitmaps in plain byte arrays, which could become quite wasteful when you deal with big/sparse bitmaps. This standalone server implements a subset of Redis operations used by bitmapist library and relies on [compressed bitmaps representation](http://roaringbitmap.org) which saves a lot of memory. Another memory-saving technique used is not keeping the whole dataset in memory.
 
 Example on heavily used bitmapist setup:
 
