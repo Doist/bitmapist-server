@@ -53,7 +53,7 @@ func New(dbFile string) (*Server, error) {
 	if s.stGetBitmapSelect, err = db.Prepare(`SELECT bytes FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`); err != nil {
 		return nil, err
 	}
-	if s.stGetBitmapInsert, err = db.Prepare(`INSERT INTO bitmaps(name,bytes) VALUES(?,?)`); err != nil {
+	if s.stGetBitmapInsert, err = db.Prepare(`INSERT OR REPLACE INTO bitmaps(name,bytes) VALUES(?,?)`); err != nil {
 		return nil, err
 	}
 	if s.stKeyTTLnanos, err = db.Prepare(`SELECT expireat FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`); err != nil {
