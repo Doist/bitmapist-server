@@ -166,7 +166,7 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 	var buf []byte
 	switch err := s.stGetBitmapSelect.QueryRow(key, nanots).Scan(&buf); err {
 	case nil:
-		bmap := new(roaring.Bitmap)
+		bmap := newBitmap()
 		if err = bmap.UnmarshalBinary(buf); err != nil {
 			return nil, err
 		}
@@ -175,7 +175,7 @@ func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, 
 		if !create {
 			return nil, nil
 		}
-		bmap := new(roaring.Bitmap)
+		bmap := newBitmap()
 		if buf, err = bmap.MarshalBinary(); err != nil {
 			return nil, err
 		}
@@ -485,8 +485,9 @@ func (s *Server) setBit(key string, offset uint32) (bool, error) {
 		return false, err
 	}
 	if bm == nil {
-		bm = roaring.NewBitmap()
+		bm = newBitmap()
 	}
+	defer stashBitmap(bm)
 	x := bm.CheckedAdd(offset)
 	if err := s.putBitmap(false, key, bm, true); err != nil {
 		return false, err
@@ -502,8 +503,9 @@ func (s *Server) clearBit(key string, offset uint32) (bool, error) {
 		return false, err
 	}
 	if bm == nil {
-		bm = roaring.NewBitmap()
+		bm = newBitmap()
 	}
+	defer stashBitmap(bm)
 	x := bm.CheckedRemove(offset)
 	if err := s.putBitmap(false, key, bm, true); err != nil {
 		return false, err
@@ -521,6 +523,7 @@ func (s *Server) contains(key string, offset uint32) (bool, error) {
 	if bm == nil {
 		return false, nil
 	}
+	defer stashBitmap(bm)
 	return bm.Contains(offset), nil
 }
 
@@ -556,6 +559,7 @@ func (s *Server) cardinality(key string) (int64, error) {
 	if bm == nil {
 		return 0, nil
 	}
+	defer stashBitmap(bm)
 	return int64(bm.GetCardinality()), nil
 }
 
@@ -563,6 +567,11 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var src []*roaring.Bitmap
+	defer func() {
+		for _, b := range src {
+			stashBitmap(b)
+		}
+	}()
 	for _, k := range sources {
 		bm, err := s.getBitmap(k, false, false)
 		if err != nil {
@@ -575,7 +584,7 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 		if len(src) > 0 {
 			// mix of found and missing keys, result would be empty
 			// (but set) bitmap
-			if err := s.putBitmap(false, key, roaring.NewBitmap(), false); err != nil {
+			if err := s.putBitmap(false, key, newBitmap(), false); err != nil {
 				return 0, err
 			}
 			return 0, nil
@@ -603,6 +612,11 @@ func (s *Server) bitopOr(key string, sources []string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var src []*roaring.Bitmap
+	defer func() {
+		for _, b := range src {
+			stashBitmap(b)
+		}
+	}()
 	for _, k := range sources {
 		bm, err := s.getBitmap(k, false, false)
 		if err != nil {
@@ -634,6 +648,11 @@ func (s *Server) bitopXor(key string, sources []string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var src []*roaring.Bitmap
+	defer func() {
+		for _, b := range src {
+			stashBitmap(b)
+		}
+	}()
 	var found bool
 	for _, k := range sources {
 		bm, err := s.getBitmap(k, false, false)
@@ -645,7 +664,7 @@ func (s *Server) bitopXor(key string, sources []string) (int64, error) {
 			found = true
 			continue
 		}
-		src = append(src, roaring.NewBitmap())
+		src = append(src, newBitmap())
 	}
 	if !found {
 		if _, err := s.delete(false, key); err != nil {
@@ -948,3 +967,20 @@ func initSchema(ctx context.Context, db *sql.DB) error {
 
 //go:embed schema.sql
 var fullSchemaSQL []byte
+
+func newBitmap() *roaring.Bitmap {
+	b := bitmapPool.Get().(*roaring.Bitmap)
+	b.Clear()
+	return b
+}
+
+func stashBitmap(b *roaring.Bitmap) {
+	if b == nil {
+		return
+	}
+	bitmapPool.Put(b)
+}
+
+var bitmapPool = sync.Pool{
+	New: func() interface{} { return new(roaring.Bitmap) },
+}
