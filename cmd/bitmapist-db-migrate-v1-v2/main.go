@@ -213,8 +213,6 @@ const expiresBucket = "expires"
 
 func initSchema(ctx context.Context, db *sql.DB) error {
 	for _, initStatement := range [...]string{
-		// `PRAGMA cache_size=102400`,
-		`PRAGMA page_size=16384`,
 		`PRAGMA journal_mode=WAL`,
 		`PRAGMA synchronous=OFF`,
 		`CREATE TABLE IF NOT EXISTS bitmaps(
