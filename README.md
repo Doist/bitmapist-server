@@ -1,6 +1,6 @@
 # Standalone bitmapist server (v2)
 
-**Notice:** v2 cannot read databases created with the v1 version. Use a dedicated migration tool to convert v1 database to v2. **TODO**
+**Notice:** v2 cannot read databases created with the v1 version. Use a dedicated migration tool to convert v1 database to v2, its code can be found in `cmd/bitmapist-db-migrate-v1-v2` directory.
 
 This is a standalone server to be used with [bitmapist library](https://github.com/Doist/bitmapist4) instead of Redis.
 
