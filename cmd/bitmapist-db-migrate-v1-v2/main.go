@@ -36,10 +36,10 @@ func main() {
 
 func run(ctx context.Context, v1Name, v2Name string) error {
 	if v1Name == "" || v2Name == "" {
-		return errors.New("both -v1db and -v2db must be set")
+		return errors.New("both -in and -out must be set")
 	}
 	if v1Name == v2Name {
-		return errors.New("-v1db and -v2db cannot point to the same file")
+		return errors.New("-in and -out cannot point to the same file")
 	}
 	// if _, err := os.Stat(v2Name); !errors.Is(err, os.ErrNotExist) {
 	// 	return fmt.Errorf("file %s must not exist", v2Name)
