@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Doist/bitmapist-server/internal/bitmapist"
+	"github.com/Doist/bitmapist-server/v2/internal/bitmapist"
 	"github.com/artyom/red"
 )
 

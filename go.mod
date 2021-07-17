@@ -1,4 +1,4 @@
-module github.com/Doist/bitmapist-server
+module github.com/Doist/bitmapist-server/v2
 
 require (
 	github.com/RoaringBitmap/roaring v0.9.1
