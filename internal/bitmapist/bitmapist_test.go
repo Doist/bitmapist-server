@@ -17,7 +17,7 @@ import (
 )
 
 func TestServer(t *testing.T) {
-	cf, cleanup := newServer(t)
+	cf, cleanup := newServer(t, false)
 	defer cleanup()
 	conn := cf()
 	defer conn.Close()
@@ -91,7 +91,7 @@ func TestServer(t *testing.T) {
 }
 
 func TestServer_handleKeys(t *testing.T) {
-	cf, cleanup := newServer(t)
+	cf, cleanup := newServer(t, false)
 	defer cleanup()
 	conn := cf()
 	defer conn.Close()
@@ -114,13 +114,13 @@ func checkResponse(t testing.TB, req string, respWanted interface{}, rd resp.Byt
 	}
 }
 
-func newServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
+func newServer(t testing.TB, relaxed bool) (fn clientConnFunc, cleanup func()) {
 	td, err := ioutil.TempDir("", "bitmapist-test-")
 	if err != nil {
 		t.Fatal(err)
 		return
 	}
-	srv, err := New(filepath.Join(td, "temp.db"))
+	srv, err := New(filepath.Join(td, "temp.db"), relaxed)
 	if err != nil {
 		os.RemoveAll(td)
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func newServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
 			t.Fatal(err)
 		}
 		return conn
@@ -165,7 +165,7 @@ func TestServerPersistence(t *testing.T) {
 	}
 	defer os.RemoveAll(td)
 	newServerDirectory := func(t testing.TB) (fn clientConnFunc, cleanup func()) {
-		srv, err := New(filepath.Join(td, "temp.db"))
+		srv, err := New(filepath.Join(td, "temp.db"), false)
 		if err != nil {
 			t.Fatal(err)
 			return

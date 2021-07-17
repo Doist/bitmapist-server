@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +23,7 @@ import (
 )
 
 // New returns initialized Server that loads/saves its data in dbFile
-func New(dbFile string) (*Server, error) {
+func New(dbFile string, relaxed bool) (*Server, error) {
 	var defuseClose bool
 	db, err := sql.Open("sqlite", dbFile)
 	if err != nil {
@@ -76,6 +77,15 @@ func New(dbFile string) (*Server, error) {
 	if s.stDeleteExpired, err = db.Prepare(`DELETE FROM bitmaps WHERE expireat!=0 && expireat<?`); err != nil {
 		return nil, err
 	}
+	s.relaxed = relaxed
+	if s.relaxed {
+		s.delayedSetBits = make(chan delayedSetBitOp)
+		s.getbitCache = make(map[string]*roaring.Bitmap)
+		s.bgProcessStopped = make(chan struct{})
+		ctx, cancel := context.WithCancel(context.Background())
+		s.bgProcessCancel = cancel
+		go s.processDelayedSetBits(ctx)
+	}
 	defuseClose = true
 	return s, nil
 }
@@ -107,6 +117,10 @@ func (s *Server) Register(srv *red.Server) {
 // blocks until state is saved and database is closed. Server should not be used
 // afterwards.
 func (s *Server) Shutdown() error {
+	if s.relaxed {
+		s.bgProcessCancel()
+		<-s.bgProcessStopped
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.db.Close()
@@ -132,6 +146,140 @@ type Server struct {
 	stMatchingKeys    *sql.Stmt
 	stDelete          *sql.Stmt
 	stDeleteExpired   *sql.Stmt
+
+	// relaxed mode enables stale GETBITs and buffered/delayed SETBITs
+	relaxed bool
+	// signals stops processDelayedSetBits to stop
+	bgProcessCancel context.CancelFunc
+	// to wait until processDelayedSetBits finishes
+	bgProcessStopped chan struct{}
+	// stream of SETBIT ops that are applied with a delay
+	delayedSetBits chan delayedSetBitOp
+	// protects variables below, they're accessed independently of the main mu
+	remu sync.Mutex
+	// holds cache for stale GETBITs; these bitmaps must not be modified
+	getbitCache map[string]*roaring.Bitmap
+}
+
+// delayedSetBitOp represents SETBIT operation that can be delayed
+type delayedSetBitOp struct {
+	key    string
+	zero   bool // true if bit needs to be cleared
+	offset uint32
+}
+
+func (s *Server) processDelayedSetBits(ctx context.Context) error {
+	defer close(s.bgProcessStopped)
+	incomingOnes := make(map[string][]uint32)
+	incomingZero := make(map[string][]uint32)
+	processAccumulated := func(now time.Time) error {
+		var cachedKeys []string // keys that weren't touched by setbit ops we accumulated
+		s.remu.Lock()
+		for k := range s.getbitCache {
+			if incomingOnes[k] == nil && incomingZero[k] == nil {
+				cachedKeys = append(cachedKeys, k)
+			}
+		}
+		s.remu.Unlock()
+
+		for name := range incomingOnes {
+			bm, err := s.updateKeyDelayedSetBits(now, name, incomingOnes[name], incomingZero[name])
+			if err != nil {
+				return err
+			}
+			delete(incomingOnes, name)
+			delete(incomingZero, name)
+			s.remu.Lock()
+			s.getbitCache[name] = bm
+			s.remu.Unlock()
+		}
+		// incomingOnes is empty at this point, but incomingZero may be not
+		for name := range incomingZero {
+			bm, err := s.updateKeyDelayedSetBits(now, name, nil, incomingZero[name])
+			if err != nil {
+				return err
+			}
+			delete(incomingZero, name)
+			s.remu.Lock()
+			s.getbitCache[name] = bm
+			s.remu.Unlock()
+		}
+		// trim getbit cache
+		const cachedKeysToKeep = 100
+		if len(cachedKeys) > cachedKeysToKeep {
+			rand.Shuffle(len(cachedKeys), func(i, j int) { cachedKeys[i], cachedKeys[j] = cachedKeys[j], cachedKeys[i] })
+			s.remu.Lock()
+			for _, k := range cachedKeys[:cachedKeysToKeep] {
+				delete(s.getbitCache, k)
+			}
+			s.remu.Unlock()
+		}
+		return nil
+	}
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	var cnt int
+	for {
+		select {
+		case now := <-ticker.C:
+			nKeys := len(incomingOnes)
+			for k := range incomingZero {
+				if incomingOnes[k] == nil {
+					nKeys++
+				}
+			}
+			if err := processAccumulated(now); err != nil {
+				s.log.Printf("applying %d delayed updates to %d keys: %v", cnt, nKeys, err)
+			}
+			if cnt != 0 {
+				s.log.Printf("applied %d delayed updates to %d keys in %v", cnt, nKeys, time.Since(now).Round(time.Millisecond))
+			}
+			cnt = 0
+		case <-ctx.Done():
+			return processAccumulated(time.Now())
+		case op := <-s.delayedSetBits:
+			cnt++
+			if op.zero {
+				incomingZero[op.key] = append(incomingZero[op.key], op.offset)
+			} else {
+				incomingOnes[op.key] = append(incomingOnes[op.key], op.offset)
+			}
+		}
+	}
+}
+
+// updateKeyDelayedSetBits applies buffered SETBIT operations to a single
+// bitmap
+func (s *Server) updateKeyDelayedSetBits(now time.Time, name string, ones, zeros []uint32) (*roaring.Bitmap, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var err error
+	var data []byte
+	var keepTTL bool
+	bm := new(roaring.Bitmap)
+	switch err := s.stGetBitmapSelect.QueryRow(name, now.UnixNano()).Scan(&data); err {
+	case sql.ErrNoRows:
+	case nil:
+		if err = bm.UnmarshalBinary(data); err != nil {
+			return nil, err
+		}
+		keepTTL = true
+	default:
+		return nil, err
+	}
+	bm.AddMany(ones)
+	for _, pos := range zeros { // TODO optimize this depending on slice size
+		bm.Remove(pos)
+	}
+	if data, err = bm.MarshalBinary(); err != nil {
+		return nil, err
+	}
+	if keepTTL {
+		_, err = s.stPutBitmap2.Exec(name, data)
+	} else {
+		_, err = s.stPutBitmap1.Exec(name, data)
+	}
+	return bm, err
 }
 
 func (s *Server) exists(key string) bool {
@@ -404,6 +552,17 @@ func (s *Server) handleSetbit(r red.Request) (interface{}, error) {
 	if err != nil {
 		return nil, errors.New("bit offset is not an integer or out of range")
 	}
+	if s.relaxed {
+		switch r.Args[2] {
+		case "0", "1":
+			// this may technically block "forever" when server is shutting
+			// down and channel receiver stops, but that's ok, as terminated
+			// process will tear down TCP session
+			s.delayedSetBits <- delayedSetBitOp{key: r.Args[0], zero: r.Args[2] == "0", offset: uint32(offset)}
+			return true, nil
+		}
+		return nil, red.ErrWrongArgs
+	}
 	switch r.Args[2] {
 	case "0":
 		return s.clearBit(r.Args[0], uint32(offset))
@@ -514,6 +673,14 @@ func (s *Server) clearBit(key string, offset uint32) (bool, error) {
 }
 
 func (s *Server) contains(key string, offset uint32) (bool, error) {
+	if s.relaxed {
+		s.remu.Lock()
+		bm, ok := s.getbitCache[key]
+		s.remu.Unlock()
+		if ok {
+			return bm.Contains(offset), nil
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	bm, err := s.getBitmap(key, false, false)
@@ -523,7 +690,13 @@ func (s *Server) contains(key string, offset uint32) (bool, error) {
 	if bm == nil {
 		return false, nil
 	}
-	defer stashBitmap(bm)
+	if s.relaxed {
+		s.remu.Lock()
+		s.getbitCache[key] = bm
+		s.remu.Unlock()
+	} else {
+		defer stashBitmap(bm)
+	}
 	return bm.Contains(offset), nil
 }
 
@@ -716,6 +889,13 @@ func (s *Server) delete(withLock bool, keys ...string) (int, error) {
 	if len(keys) == 0 {
 		return 0, nil
 	}
+	if s.relaxed {
+		s.remu.Lock() // TODO: review lock ordering, make sure there's no deadlock with how both mutexes are held
+		for _, k := range keys {
+			delete(s.getbitCache, k)
+		}
+		s.remu.Unlock()
+	}
 	nanos := time.Now().UnixNano()
 	if withLock {
 		s.mu.Lock()
@@ -779,7 +959,7 @@ func (s *Server) bitmapBytes(key string) ([]byte, error) {
 		s.mu.Unlock()
 		return nil, nil
 	}
-	bm = bm.Clone()
+	bm = bm.Clone() // TODO: is this still needed?
 	s.mu.Unlock()
 	if bm.GetCardinality() == 0 {
 		return []byte{}, nil

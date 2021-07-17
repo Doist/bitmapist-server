@@ -2,7 +2,6 @@ module github.com/Doist/bitmapist-server
 
 require (
 	github.com/RoaringBitmap/roaring v0.9.1
-	github.com/artyom/autoflags v1.1.1
 	github.com/artyom/red v0.0.1
 	github.com/artyom/resp v1.0.0
 	github.com/davecgh/go-spew v1.1.1 // indirect

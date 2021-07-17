@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Doist/bitmapist-server/internal/bitmapist"
-	"github.com/artyom/autoflags"
 	"github.com/artyom/red"
 )
 
@@ -21,15 +20,22 @@ var explicitVersion string // to be set by CI with -ldflags="-X=main.explicitVer
 
 func main() {
 	args := struct {
-		Addr string `flag:"addr,address to listen"`
-		File string `flag:"db,path to database file"`
-		Bak  string `flag:"bak,file to save backup to on SIGUSR1"`
-		Dbg  bool   `flag:"debug,log incoming commands"`
+		Addr string
+		File string
+		Bak  string
+		Dbg  bool
+		Rel  bool
 	}{
 		Addr: "localhost:6379",
 		File: "bitmapist.db",
 	}
-	autoflags.Define(&args)
+	flag.StringVar(&args.Addr, "addr", args.Addr, "`address` to listen")
+	flag.StringVar(&args.File, "db", args.File, "`path` to database file")
+	flag.StringVar(&args.Bak, "bak", args.Bak, "optional `path` to backup file; send SIGUSR1 to trigger online backup")
+	flag.BoolVar(&args.Dbg, "debug", args.Dbg, "log all commands")
+	flag.BoolVar(&args.Rel, "relaxed", args.Rel, "enable stale GETBIT reads and delayed SETBIT writes: this helps"+
+		"\nget better throughput on high GETBIT and SETBIT rates, when it's"+
+		"\nacceptable to get results which may be up to few minutes stale")
 	var versionOnly bool
 	flag.BoolVar(&versionOnly, "v", versionOnly, "print version and exit")
 	flag.BoolVar(&versionOnly, "version", versionOnly, "print version and exit")
@@ -50,13 +56,10 @@ func main() {
 		log.SetFlags(0) // systemd takes care of log line timestamps
 	}
 
-	log.Println("loading data from", args.File)
-	begin := time.Now()
-	s, err := bitmapist.New(args.File)
+	s, err := bitmapist.New(args.File, args.Rel)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Println("loaded in", time.Since(begin))
 	s.WithLogger(log)
 
 	srv := red.NewServer()

@@ -21,7 +21,7 @@ func TestAgainstRedis(t *testing.T) {
 	if _, err := exec.LookPath("redis-server"); err != nil {
 		t.Skip("redis-server not found in path, skipping test")
 	}
-	cf, cleanup := newServer(t)
+	cf, cleanup := newServer(t, false)
 	defer cleanup()
 
 	cfRedis, cleanupRedis := newRedisServer(t)
