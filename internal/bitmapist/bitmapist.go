@@ -282,11 +282,8 @@ func (s *Server) updateKeyDelayedSetBits(now time.Time, name string, ones, zeros
 }
 
 func (s *Server) exists(key string) bool {
-	nanos := time.Now().UnixNano()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var sink int
-	_ = s.stExistsQuery.QueryRow(key, nanos).Scan(sink)
+	_ = s.stExistsQuery.QueryRow(key, time.Now().UnixNano()).Scan(sink)
 	return sink == 1
 }
 
@@ -307,7 +304,10 @@ func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap, keepEx
 	return err
 }
 
-// getBitmap works on an already locked server!
+// getBitmap returns Bitmap from the database, creating one if needed. If
+// create is true, then s.mu must be locked, as getBitmap may issue two
+// statements to the database: one to read, another one to write, lock prevents
+// potential race on concurrent write to the same key.
 func (s *Server) getBitmap(key string, create bool) (*roaring.Bitmap, error) {
 	nanots := time.Now().UnixNano()
 	var buf []byte
@@ -407,8 +407,6 @@ func (s *Server) handlePTTL(req red.Request) (interface{}, error) {
 
 func (s *Server) keyTTLnanos(key string) (int64, error) {
 	nownanos := time.Now().UnixNano()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var expireat int64
 	if err := s.stKeyTTLnanos.QueryRow(key, nownanos).Scan(&expireat); err != nil {
 		if err == sql.ErrNoRows {
@@ -610,8 +608,6 @@ func (s *Server) handleInfo(r red.Request) (interface{}, error) {
 	default:
 		return nil, red.ErrWrongArgs
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var cnt int
 	if err := s.stInfo.QueryRow(time.Now().UnixNano()).Scan(&cnt); err != nil {
 		return nil, err
@@ -680,8 +676,6 @@ func (s *Server) contains(key string, offset uint32) (bool, error) {
 			return bm.Contains(offset), nil
 		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	bm, err := s.getBitmap(key, false)
 	if err != nil {
 		return false, err
@@ -700,9 +694,7 @@ func (s *Server) contains(key string, offset uint32) (bool, error) {
 }
 
 func (s *Server) matchingKeys(pattern string) ([]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	keys := []string{}
+	keys := []string{} // must be non-nil, even if empty
 	rows, err := s.stMatchingKeys.Query(pattern, time.Now().UnixNano())
 	if err != nil {
 		return nil, err
@@ -722,8 +714,6 @@ func (s *Server) matchingKeys(pattern string) ([]string, error) {
 }
 
 func (s *Server) cardinality(key string) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	bm, err := s.getBitmap(key, false)
 	if err != nil {
 		return 0, err
@@ -948,18 +938,13 @@ func (s *Server) setFromBytes(key string, data []byte) error {
 }
 
 func (s *Server) bitmapBytes(key string) ([]byte, error) {
-	s.mu.Lock()
 	bm, err := s.getBitmap(key, false)
 	if err != nil {
-		s.mu.Unlock()
 		return nil, err
 	}
 	if bm == nil {
-		s.mu.Unlock()
 		return nil, nil
 	}
-	bm = bm.Clone() // TODO: is this still needed?
-	s.mu.Unlock()
 	if bm.GetCardinality() == 0 {
 		return []byte{}, nil
 	}
