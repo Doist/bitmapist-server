@@ -131,9 +131,9 @@ func (s *Server) Shutdown() error {
 // run on top of github.com/artyom/red.Server which handles redis protocol-level
 // details and networking.
 type Server struct {
+	mu  sync.Mutex // serializes write access to db
 	db  *sql.DB
 	log *log.Logger
-	mu  sync.Mutex
 
 	stExistsQuery     *sql.Stmt
 	stPutBitmap1      *sql.Stmt
