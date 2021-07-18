@@ -8,6 +8,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -38,7 +40,7 @@ func New(dbFile string, relaxed bool) (*Server, error) {
 	}
 	s := &Server{
 		db:  db,
-		log: noopLogger{},
+		log: log.New(io.Discard, "", 0),
 	}
 	if s.stExistsQuery, err = db.Prepare(`SELECT 1 FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`); err != nil {
 		return nil, err
@@ -130,7 +132,7 @@ func (s *Server) Shutdown() error {
 // details and networking.
 type Server struct {
 	db  *sql.DB
-	log Logger
+	log *log.Logger
 	mu  sync.Mutex
 
 	stExistsQuery     *sql.Stmt
@@ -1086,28 +1088,14 @@ func handlePing(r red.Request) (interface{}, error) {
 	return r.Args[0], nil
 }
 
-// Logger is a set of methods used to log information. *log.Logger implements
-// this interface.
-type Logger interface {
-	Print(v ...interface{})
-	Printf(format string, v ...interface{})
-	Println(v ...interface{})
-}
-
-// WithLogger configures server to use provided Logger.
-func (s *Server) WithLogger(l Logger) {
+// WithLogger configures server to use the provided Logger.
+func (s *Server) WithLogger(l *log.Logger) {
 	if l == nil {
-		s.log = noopLogger{}
+		s.log = log.New(io.Discard, "", 0)
 		return
 	}
 	s.log = l
 }
-
-type noopLogger struct{}
-
-func (noopLogger) Print(v ...interface{})                 {}
-func (noopLogger) Printf(format string, v ...interface{}) {}
-func (noopLogger) Println(v ...interface{})               {}
 
 func maxValue(b *roaring.Bitmap) uint32 {
 	if b.IsEmpty() {
