@@ -308,7 +308,7 @@ func (s *Server) putBitmap(withLock bool, key string, bm *roaring.Bitmap, keepEx
 }
 
 // getBitmap works on an already locked server!
-func (s *Server) getBitmap(key string, create, setDirty bool) (*roaring.Bitmap, error) {
+func (s *Server) getBitmap(key string, create bool) (*roaring.Bitmap, error) {
 	nanots := time.Now().UnixNano()
 	var buf []byte
 	switch err := s.stGetBitmapSelect.QueryRow(key, nanots).Scan(&buf); err {
@@ -638,7 +638,7 @@ func (s *Server) handleScan(r red.Request) (interface{}, error) {
 func (s *Server) setBit(key string, offset uint32) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	bm, err := s.getBitmap(key, true, true)
+	bm, err := s.getBitmap(key, true)
 	if err != nil {
 		return false, err
 	}
@@ -656,7 +656,7 @@ func (s *Server) setBit(key string, offset uint32) (bool, error) {
 func (s *Server) clearBit(key string, offset uint32) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	bm, err := s.getBitmap(key, true, true)
+	bm, err := s.getBitmap(key, true)
 	if err != nil {
 		return false, err
 	}
@@ -682,7 +682,7 @@ func (s *Server) contains(key string, offset uint32) (bool, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	bm, err := s.getBitmap(key, false, false)
+	bm, err := s.getBitmap(key, false)
 	if err != nil {
 		return false, err
 	}
@@ -724,7 +724,7 @@ func (s *Server) matchingKeys(pattern string) ([]string, error) {
 func (s *Server) cardinality(key string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	bm, err := s.getBitmap(key, false, false)
+	bm, err := s.getBitmap(key, false)
 	if err != nil {
 		return 0, err
 	}
@@ -745,7 +745,7 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 		}
 	}()
 	for _, k := range sources {
-		bm, err := s.getBitmap(k, false, false)
+		bm, err := s.getBitmap(k, false)
 		if err != nil {
 			return 0, err
 		}
@@ -790,7 +790,7 @@ func (s *Server) bitopOr(key string, sources []string) (int64, error) {
 		}
 	}()
 	for _, k := range sources {
-		bm, err := s.getBitmap(k, false, false)
+		bm, err := s.getBitmap(k, false)
 		if err != nil {
 			return 0, err
 		}
@@ -827,7 +827,7 @@ func (s *Server) bitopXor(key string, sources []string) (int64, error) {
 	}()
 	var found bool
 	for _, k := range sources {
-		bm, err := s.getBitmap(k, false, false)
+		bm, err := s.getBitmap(k, false)
 		if err != nil {
 			return 0, err
 		}
@@ -859,7 +859,7 @@ func (s *Server) bitopXor(key string, sources []string) (int64, error) {
 func (s *Server) bitopNot(dst, src string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b1, err := s.getBitmap(src, false, false)
+	b1, err := s.getBitmap(src, false)
 	if err != nil {
 		return 0, err
 	}
@@ -949,7 +949,7 @@ func (s *Server) setFromBytes(key string, data []byte) error {
 
 func (s *Server) bitmapBytes(key string) ([]byte, error) {
 	s.mu.Lock()
-	bm, err := s.getBitmap(key, false, false)
+	bm, err := s.getBitmap(key, false)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
