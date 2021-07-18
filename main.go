@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/Doist/bitmapist-server/v2/internal/bitmapist"
 	"github.com/artyom/red"
+	"modernc.org/sqlite"
 )
 
 var explicitVersion string // to be set by CI with -ldflags="-X=main.explicitVersion=v1.2.3"
@@ -51,13 +53,16 @@ func main() {
 		return
 	}
 
-	log := log.New(os.Stderr, "", log.LstdFlags)
-	if os.Getppid() == 1 && os.Getenv("INVOCATION_ID") != "" {
-		log.SetFlags(0) // systemd takes care of log line timestamps
-	}
+	log := log.New(os.Stderr, "", 0)
 
 	s, err := bitmapist.New(args.File, args.Rel)
 	if err != nil {
+		var sErr *sqlite.Error
+		if errors.As(err, &sErr) && sErr.Code() == 26 {
+			log.Fatal("Database file has unsupported format." +
+				"\nIf you upgraded from v1.x version, make sure to convert database to the new format first." +
+				"\nSee https://github.com/Doist/bitmapist-server#readme for details.")
+		}
 		log.Fatal(err)
 	}
 	s.WithLogger(log)
