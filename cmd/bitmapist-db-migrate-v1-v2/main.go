@@ -83,6 +83,8 @@ func persistStream(ctx context.Context, db *sql.DB, entries <-chan *dbEntry) err
 	var approxWriteSize int // approximate number of bytes to commit in a single tx
 	var longestInsert, longestTx, latestTx time.Duration
 	var maxBodySize int
+	reportTicker := time.NewTicker(time.Second)
+	defer reportTicker.Stop()
 	emitStat := func(n int) {
 		doNewline = true
 		fmt.Printf("%c[2K\rrows: %d, latest tx: %v, longest tx: %v, longest insert: %v, max body size: %d Mb",
@@ -133,9 +135,6 @@ func persistStream(ctx context.Context, db *sql.DB, entries <-chan *dbEntry) err
 		if d := time.Since(begin); longestInsert < d {
 			longestInsert = d
 		}
-		if i%100 == 0 {
-			emitStat(i)
-		}
 		if approxWriteSize > maxTxSizeInBytes {
 			approxWriteSize = 0
 			st.Close()
@@ -148,7 +147,11 @@ func persistStream(ctx context.Context, db *sql.DB, entries <-chan *dbEntry) err
 				longestTx = latestTx
 			}
 			tx, st = nil, nil
+		}
+		select {
+		case <-reportTicker.C:
 			emitStat(i)
+		default:
 		}
 	}
 }
