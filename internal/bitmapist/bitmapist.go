@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	_ "embed"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -35,7 +34,7 @@ func New(dbFile string, relaxed bool) (*Server, error) {
 		}
 	}()
 	if err := initSchema(context.Background(), db); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("database init: %w", err)
 	}
 	s := &Server{
 		db:  db,
@@ -1133,20 +1132,23 @@ func maxValue(b *roaring.Bitmap) uint32 {
 }
 
 func initSchema(ctx context.Context, db *sql.DB) error {
-	for _, initStatement := range bytes.Split(fullSchemaSQL, []byte(";")) {
-		initStatement = bytes.TrimSpace(initStatement)
-		if len(initStatement) == 0 {
-			continue
-		}
+	for _, initStatement := range [...]string{
+		`PRAGMA busy_timeout = 5000`,
+		`PRAGMA journal_mode=WAL`,
+		`PRAGMA synchronous=normal`,
+		`CREATE TABLE IF NOT EXISTS bitmaps(
+			name TEXT PRIMARY KEY NOT NULL CHECK(name!=''),
+			expireat INTEGER NOT NULL DEFAULT 0,
+			bytes BLOB NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_bitmaps_expireat ON bitmaps(expireat)`,
+	} {
 		if _, err := db.ExecContext(ctx, string(initStatement)); err != nil {
-			return fmt.Errorf("database init: %w", err)
+			return err
 		}
 	}
 	return nil
 }
-
-//go:embed schema.sql
-var fullSchemaSQL []byte
 
 func newBitmap() *roaring.Bitmap {
 	b := bitmapPool.Get().(*roaring.Bitmap)
