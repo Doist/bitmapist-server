@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Doist/bitmapist-server/v2/internal/lru"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/artyom/red"
 	"github.com/artyom/resp"
@@ -81,7 +81,7 @@ func New(dbFile string, relaxed bool) (*Server, error) {
 	s.relaxed = relaxed
 	if s.relaxed {
 		s.delayedSetBits = make(chan delayedSetBitOp)
-		s.getbitCache = make(map[string]*roaring.Bitmap)
+		s.getbitCache = lru.New(1000)
 		s.bgProcessStopped = make(chan struct{})
 		ctx, cancel := context.WithCancel(context.Background())
 		s.bgProcessCancel = cancel
@@ -156,10 +156,8 @@ type Server struct {
 	bgProcessStopped chan struct{}
 	// stream of SETBIT ops that are applied with a delay
 	delayedSetBits chan delayedSetBitOp
-	// protects variables below, they're accessed independently of the main mu
-	remu sync.Mutex
 	// holds cache for stale GETBITs; these bitmaps must not be modified
-	getbitCache map[string]*roaring.Bitmap
+	getbitCache *lru.Cache
 }
 
 // delayedSetBitOp represents SETBIT operation that can be delayed
@@ -174,15 +172,6 @@ func (s *Server) processDelayedSetBits(ctx context.Context) error {
 	incomingOnes := make(map[string][]uint32)
 	incomingZero := make(map[string][]uint32)
 	processAccumulated := func(now time.Time) error {
-		var cachedKeys []string // keys that weren't touched by setbit ops we accumulated
-		s.remu.Lock()
-		for k := range s.getbitCache {
-			if incomingOnes[k] == nil && incomingZero[k] == nil {
-				cachedKeys = append(cachedKeys, k)
-			}
-		}
-		s.remu.Unlock()
-
 		for name := range incomingOnes {
 			bm, err := s.updateKeyDelayedSetBits(now, name, incomingOnes[name], incomingZero[name])
 			if err != nil {
@@ -190,9 +179,7 @@ func (s *Server) processDelayedSetBits(ctx context.Context) error {
 			}
 			delete(incomingOnes, name)
 			delete(incomingZero, name)
-			s.remu.Lock()
-			s.getbitCache[name] = bm
-			s.remu.Unlock()
+			s.getbitCache.Add(name, bm)
 		}
 		// incomingOnes is empty at this point, but incomingZero may be not
 		for name := range incomingZero {
@@ -201,19 +188,7 @@ func (s *Server) processDelayedSetBits(ctx context.Context) error {
 				return err
 			}
 			delete(incomingZero, name)
-			s.remu.Lock()
-			s.getbitCache[name] = bm
-			s.remu.Unlock()
-		}
-		// trim getbit cache
-		const cachedKeysToKeep = 100
-		if len(cachedKeys) > cachedKeysToKeep {
-			rand.Shuffle(len(cachedKeys), func(i, j int) { cachedKeys[i], cachedKeys[j] = cachedKeys[j], cachedKeys[i] })
-			s.remu.Lock()
-			for _, k := range cachedKeys[:cachedKeysToKeep] {
-				delete(s.getbitCache, k)
-			}
-			s.remu.Unlock()
+			s.getbitCache.Add(name, bm)
 		}
 		return nil
 	}
@@ -671,9 +646,7 @@ func (s *Server) clearBit(key string, offset uint32) (bool, error) {
 
 func (s *Server) contains(key string, offset uint32) (bool, error) {
 	if s.relaxed {
-		s.remu.Lock()
-		bm, ok := s.getbitCache[key]
-		s.remu.Unlock()
+		bm, ok := s.getbitCache.Get(key)
 		if ok {
 			return bm.Contains(offset), nil
 		}
@@ -686,9 +659,7 @@ func (s *Server) contains(key string, offset uint32) (bool, error) {
 		return false, nil
 	}
 	if s.relaxed {
-		s.remu.Lock()
-		s.getbitCache[key] = bm
-		s.remu.Unlock()
+		s.getbitCache.Add(key, bm)
 	} else {
 		defer stashBitmap(bm)
 	}
@@ -881,11 +852,9 @@ func (s *Server) delete(withLock bool, keys ...string) (int, error) {
 		return 0, nil
 	}
 	if s.relaxed {
-		s.remu.Lock() // TODO: review lock ordering, make sure there's no deadlock with how both mutexes are held
 		for _, k := range keys {
-			delete(s.getbitCache, k)
+			s.getbitCache.Remove(k)
 		}
-		s.remu.Unlock()
 	}
 	nanos := time.Now().UnixNano()
 	if withLock {

@@ -77,6 +77,15 @@ func (c *Cache) Get(key string) (value *roaring.Bitmap, ok bool) {
 	return
 }
 
+func (c *Cache) Remove(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ele, hit := c.cache[key]; hit {
+		c.ll.Remove(ele)
+		delete(c.cache, key)
+	}
+}
+
 // RemoveOldest removes the oldest item in the cache and returns its key and value.
 // If the cache is empty, the empty string and nil are returned.
 func (c *Cache) RemoveOldest() (key string, value *roaring.Bitmap) {
