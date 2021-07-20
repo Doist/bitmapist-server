@@ -23,6 +23,10 @@ For other platforms or if you want to build bitmapist-server from source, you ne
 
 Binary will be saved as `bitmapist-server`.
 
+Alternatively you can run
+
+    go install github.com/Doist/bitmapist-server/v2@latest
+
 ## Usage
 
     Usage of bitmapist-server:
@@ -33,9 +37,9 @@ Binary will be saved as `bitmapist-server`.
       -db string
             path to database file (default "bitmapist.db")
 
-It is not safe to copy the database while the process is running. If you need to get a consistent snapshot without downtime, point `-bak` flag to a separate file; the process would save a consistent copy of its database to this file on USR1 signal.
+It is not safe to copy the database while the process is running. If you need to get a consistent snapshot without downtime, point `-bak` flag to a separate file; the process would save a consistent copy of its database to this file on USR1 signal. Since bitmapist-server uses SQLite as its on-disk format, it is possible to work with the database using some other tools. For example, you can use [Litestream](https://litestream.io) to do online streaming backup.
 
-You may need to migrate data from already running Redis instance; to do so, issue a special command over Redis protocol: `slurp host:port [db]` where `host`, `port` and `db` specify the address and optionally the number of the running Redis database to import. Note that all string keys would be imported from this Redis instance, it's expected that instance is only used for bitmapist data.
+You may need to migrate data from an already running Redis instance; to do so, issue a special command over Redis protocol: `slurp host:port [db]` where `host`, `port` and `db` specify the address and optionally the number of the running Redis database to import. Note that all string keys would be imported from this Redis instance, it's expected that instance is only used for bitmapist data.
 
 Special command `info keys` displays the total number of keys in the database.
 
