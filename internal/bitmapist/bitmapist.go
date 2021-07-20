@@ -1105,6 +1105,16 @@ func maxValue(b *roaring.Bitmap) uint32 {
 }
 
 func initSchema(ctx context.Context, db *sql.DB) error {
+	const userVersion = 1 // increase this on every (non-pragma) schema change
+	var v int
+	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&v); err != nil {
+		return err
+	}
+	if v > userVersion {
+		return fmt.Errorf("database schema version is too high (%d), make sure you use "+
+			"an up to date program, this one only supports schema version %d",
+			v, userVersion)
+	}
 	for _, initStatement := range [...]string{
 		`PRAGMA busy_timeout = 5000`,
 		`PRAGMA journal_mode=WAL`,
@@ -1115,6 +1125,8 @@ func initSchema(ctx context.Context, db *sql.DB) error {
 			bytes BLOB NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_bitmaps_expireat ON bitmaps(expireat)`,
+		// this one cannot be used with argument binding
+		`PRAGMA user_version=` + strconv.FormatUint(userVersion, 10),
 	} {
 		if _, err := db.ExecContext(ctx, string(initStatement)); err != nil {
 			return err
