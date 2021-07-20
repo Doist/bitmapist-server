@@ -15,11 +15,13 @@ limitations under the License.
 */
 
 // Package lru implements an LRU cache.
-package lru // import "camlistore.org/pkg/lru"
+package lru
 
 import (
-	"container/list"
 	"sync"
+
+	"github.com/Doist/bitmapist-server/v2/internal/list"
+	"github.com/RoaringBitmap/roaring"
 )
 
 // Cache is an LRU cache, safe for concurrent access.
@@ -29,12 +31,6 @@ type Cache struct {
 	mu    sync.Mutex
 	ll    *list.List
 	cache map[string]*list.Element
-}
-
-// *entry is the type stored in each *list.Element.
-type entry struct {
-	key   string
-	value interface{}
 }
 
 // New returns a new cache with the provided maximum items.
@@ -49,19 +45,19 @@ func New(maxEntries int) *Cache {
 
 // Add adds the provided key and value to the cache, evicting
 // an old item if necessary.
-func (c *Cache) Add(key string, value interface{}) {
+func (c *Cache) Add(key string, value *roaring.Bitmap) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Already in cache?
 	if ee, ok := c.cache[key]; ok {
 		c.ll.MoveToFront(ee)
-		ee.Value.(*entry).value = value
+		ee.Value.Value = value
 		return
 	}
 
 	// Add to cache if not present
-	ele := c.ll.PushFront(&entry{key, value})
+	ele := c.ll.PushFront(&list.Entry{Key: key, Value: value})
 	c.cache[key] = ele
 
 	if c.maxEntries > 0 && c.ll.Len() > c.maxEntries {
@@ -71,34 +67,34 @@ func (c *Cache) Add(key string, value interface{}) {
 
 // Get fetches the key's value from the cache.
 // The ok result will be true if the item was found.
-func (c *Cache) Get(key string) (value interface{}, ok bool) {
+func (c *Cache) Get(key string) (value *roaring.Bitmap, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if ele, hit := c.cache[key]; hit {
 		c.ll.MoveToFront(ele)
-		return ele.Value.(*entry).value, true
+		return ele.Value.Value, true
 	}
 	return
 }
 
 // RemoveOldest removes the oldest item in the cache and returns its key and value.
 // If the cache is empty, the empty string and nil are returned.
-func (c *Cache) RemoveOldest() (key string, value interface{}) {
+func (c *Cache) RemoveOldest() (key string, value *roaring.Bitmap) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.removeOldest()
 }
 
 // note: must hold c.mu
-func (c *Cache) removeOldest() (key string, value interface{}) {
+func (c *Cache) removeOldest() (key string, value *roaring.Bitmap) {
 	ele := c.ll.Back()
 	if ele == nil {
 		return
 	}
 	c.ll.Remove(ele)
-	ent := ele.Value.(*entry)
-	delete(c.cache, ent.key)
-	return ent.key, ent.value
+	ent := ele.Value
+	delete(c.cache, ent.Key)
+	return ent.Key, ent.Value
 
 }
 

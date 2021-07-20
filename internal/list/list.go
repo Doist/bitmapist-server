@@ -11,6 +11,13 @@
 //
 package list
 
+import "github.com/RoaringBitmap/roaring"
+
+type Entry struct {
+	Key   string
+	Value *roaring.Bitmap
+}
+
 // Element is an element of a linked list.
 type Element struct {
 	// Next and previous pointers in the doubly-linked list of elements.
@@ -24,7 +31,7 @@ type Element struct {
 	list *List
 
 	// The value stored with this element.
-	Value interface{}
+	Value *Entry
 }
 
 // Next returns the next list element or nil.
@@ -100,7 +107,7 @@ func (l *List) insert(e, at *Element) *Element {
 }
 
 // insertValue is a convenience wrapper for insert(&Element{Value: v}, at).
-func (l *List) insertValue(v interface{}, at *Element) *Element {
+func (l *List) insertValue(v *Entry, at *Element) *Element {
 	return l.insert(&Element{Value: v}, at)
 }
 
@@ -134,7 +141,7 @@ func (l *List) move(e, at *Element) *Element {
 // Remove removes e from l if e is an element of list l.
 // It returns the element value e.Value.
 // The element must not be nil.
-func (l *List) Remove(e *Element) interface{} {
+func (l *List) Remove(e *Element) *Entry {
 	if e.list == l {
 		// if e.list == l, l must have been initialized when e was inserted
 		// in l or l == nil (e is a zero Element) and l.remove will crash
@@ -144,13 +151,13 @@ func (l *List) Remove(e *Element) interface{} {
 }
 
 // PushFront inserts a new element e with value v at the front of list l and returns e.
-func (l *List) PushFront(v interface{}) *Element {
+func (l *List) PushFront(v *Entry) *Element {
 	l.lazyInit()
 	return l.insertValue(v, &l.root)
 }
 
 // PushBack inserts a new element e with value v at the back of list l and returns e.
-func (l *List) PushBack(v interface{}) *Element {
+func (l *List) PushBack(v *Entry) *Element {
 	l.lazyInit()
 	return l.insertValue(v, l.root.prev)
 }
@@ -158,7 +165,7 @@ func (l *List) PushBack(v interface{}) *Element {
 // InsertBefore inserts a new element e with value v immediately before mark and returns e.
 // If mark is not an element of l, the list is not modified.
 // The mark must not be nil.
-func (l *List) InsertBefore(v interface{}, mark *Element) *Element {
+func (l *List) InsertBefore(v *Entry, mark *Element) *Element {
 	if mark.list != l {
 		return nil
 	}
@@ -169,7 +176,7 @@ func (l *List) InsertBefore(v interface{}, mark *Element) *Element {
 // InsertAfter inserts a new element e with value v immediately after mark and returns e.
 // If mark is not an element of l, the list is not modified.
 // The mark must not be nil.
-func (l *List) InsertAfter(v interface{}, mark *Element) *Element {
+func (l *List) InsertAfter(v *Entry, mark *Element) *Element {
 	if mark.list != l {
 		return nil
 	}
