@@ -82,7 +82,7 @@ func New(dbFile string, relaxed bool) (*Server, error) {
 	}
 	s.relaxed = relaxed
 	if s.relaxed {
-		s.delayedSetBits = make(chan delayedSetBitOp)
+		s.delayedSetBits = make(chan delayedSetBitOp, 1000)
 		s.getbitCache = lru.New(1000)
 		s.bgProcessStopped = make(chan struct{})
 		ctx, cancel := context.WithCancel(context.Background())
