@@ -69,7 +69,10 @@ func New(dbFile string, relaxed bool) (*Server, error) {
 	if s.stInfo, err = db.Prepare(`SELECT count(*) FROM bitmaps WHERE expireat=0 OR expireat>?`); err != nil {
 		return nil, err
 	}
-	if s.stMatchingKeys, err = db.Prepare(`SELECT name FROM bitmaps WHERE name GLOB ? AND (expireat=0 OR expireat>?)`); err != nil {
+	if s.stMatchingKeys, err = db.Prepare(`SELECT name FROM bitmaps WHERE name GLOB @pattern AND (expireat=0 OR expireat>@now)`); err != nil {
+		return nil, err
+	}
+	if s.stMatchingKeysLim, err = db.Prepare(`SELECT name FROM bitmaps WHERE name GLOB @pattern AND (expireat=0 OR expireat>@now) LIMIT @limit OFFSET @offset`); err != nil {
 		return nil, err
 	}
 	if s.stDelete, err = db.Prepare(`DELETE FROM bitmaps WHERE name=? AND (expireat=0 OR expireat>?)`); err != nil {
@@ -145,6 +148,7 @@ type Server struct {
 	stRename          *sql.Stmt
 	stInfo            *sql.Stmt
 	stMatchingKeys    *sql.Stmt
+	stMatchingKeysLim *sql.Stmt
 	stDelete          *sql.Stmt
 	stDeleteExpired   *sql.Stmt
 
@@ -573,7 +577,7 @@ func (s *Server) handleKeys(r red.Request) (interface{}, error) {
 	if len(r.Args) != 1 {
 		return nil, red.ErrWrongArgs
 	}
-	return s.matchingKeys(r.Args[0])
+	return s.matchingKeys(r.Args[0], 0, 0)
 }
 
 func (s *Server) handleInfo(r red.Request) (interface{}, error) {
@@ -596,16 +600,30 @@ func (s *Server) handleInfo(r red.Request) (interface{}, error) {
 
 func (s *Server) handleScan(r red.Request) (interface{}, error) {
 	// SCAN 0 MATCH trackist_* COUNT 2
-	if len(r.Args) != 5 || r.Args[0] != "0" ||
+	if len(r.Args) != 5 ||
 		strings.ToLower(r.Args[1]) != "match" ||
 		strings.ToLower(r.Args[3]) != "count" {
 		return nil, red.ErrWrongArgs
 	}
-	keys, err := s.matchingKeys(r.Args[2])
+	var limit, offset int
+	if x, err := strconv.ParseUint(r.Args[4], 10, 16); err != nil {
+		return nil, fmt.Errorf("cannot parse COUNT argument value: %w", err)
+	} else {
+		limit = int(x)
+	}
+	if x, err := strconv.ParseUint(r.Args[0], 10, 32); err != nil {
+		return nil, fmt.Errorf("cannot parse cursor value: %w", err)
+	} else {
+		offset = int(x)
+	}
+	keys, err := s.matchingKeys(r.Args[2], limit, offset)
 	if err != nil {
 		return nil, err
 	}
-	return resp.Array{"0", keys}, nil
+	if len(keys) == 0 {
+		return resp.Array{"0", keys}, nil
+	}
+	return resp.Array{strconv.Itoa(offset + len(keys)), keys}, nil
 }
 
 func (s *Server) setBit(key string, offset uint32) (bool, error) {
@@ -666,9 +684,17 @@ func (s *Server) contains(key string, offset uint32) (bool, error) {
 	return bm.Contains(offset), nil
 }
 
-func (s *Server) matchingKeys(pattern string) ([]string, error) {
+func (s *Server) matchingKeys(pattern string, limit, offset int) ([]string, error) {
 	keys := []string{} // must be non-nil, even if empty
-	rows, err := s.stMatchingKeys.Query(pattern, time.Now().UnixNano())
+	var err error
+	var rows *sql.Rows
+	queryArgs := []interface{}{sql.Named("pattern", pattern), sql.Named("now", time.Now().UnixNano())}
+	if limit == 0 && offset == 0 {
+		rows, err = s.stMatchingKeys.Query(queryArgs...)
+	} else {
+		queryArgs = append(queryArgs, sql.Named("limit", limit), sql.Named("offset", offset))
+		rows, err = s.stMatchingKeysLim.Query(queryArgs...)
+	}
 	if err != nil {
 		return nil, err
 	}
