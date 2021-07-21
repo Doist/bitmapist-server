@@ -2,7 +2,7 @@ name: Publish Docker image
 on:
   push:
     tags:
-      - v*
+      - v1*
 
 env:
   IMAGE_NAME: bitmapist-server
