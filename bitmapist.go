@@ -1,6 +1,4 @@
-// Package bitmapist implements standalone bitmapist server that can be used
-// instead of Redis for https://github.com/Doist/bitmapist library.
-package bitmapist
+package main
 
 import (
 	"bytes"

@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Doist/bitmapist-server/v2/internal/bitmapist"
 	"github.com/artyom/red"
 	"modernc.org/sqlite"
 )
@@ -55,7 +54,7 @@ func main() {
 
 	log := log.New(os.Stderr, "", 0)
 
-	s, err := bitmapist.New(args.File, args.Rel)
+	s, err := New(args.File, args.Rel)
 	if err != nil {
 		var sErr *sqlite.Error
 		if errors.As(err, &sErr) && sErr.Code() == 26 {
@@ -104,7 +103,7 @@ func main() {
 
 // doBackup creates temporary file, calls s.Backup on it and renames temporary
 // file to dst if backup completed successfully.
-func doBackup(s *bitmapist.Server, dst string) error {
+func doBackup(s *Server, dst string) error {
 	dir, err := os.MkdirTemp(filepath.Dir(dst), "bitmapist-backup-")
 	if err != nil {
 		return err
