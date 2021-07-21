@@ -2,31 +2,28 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/artyom/red"
+	"golang.org/x/sync/errgroup"
 	"modernc.org/sqlite"
 )
 
 var explicitVersion string // to be set by CI with -ldflags="-X=main.explicitVersion=v1.2.3"
 
 func main() {
-	args := struct {
-		Addr string
-		File string
-		Bak  string
-		Dbg  bool
-		Rel  bool
-	}{
+	args := runArgs{
 		Addr: "localhost:6379",
 		File: "bitmapist.db",
 	}
@@ -51,54 +48,82 @@ func main() {
 		fmt.Printf("bitmapist-server %s\n", v)
 		return
 	}
+	log.SetFlags(0)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if err := run(ctx, args); err != nil {
+		log.Fatal(err)
+	}
+}
 
-	log := log.New(os.Stderr, "", 0)
+type runArgs struct {
+	Addr string
+	File string
+	Bak  string
+	Dbg  bool
+	Rel  bool
+}
 
-	s, err := New(args.File, args.Rel)
+func run(ctx context.Context, args runArgs) error {
+	srv, err := New(args.File, args.Rel)
 	if err != nil {
 		var sErr *sqlite.Error
 		if errors.As(err, &sErr) && sErr.Code() == 26 {
-			log.Fatal("Database file has unsupported format." +
+			//lint:ignore ST1005 this error must be descriptive enough for the end user, so using newlines here
+			return errors.New("Database file has unsupported format." +
 				"\nIf you upgraded from v1.x version, make sure to convert database to the new format first." +
 				"\nSee https://github.com/Doist/bitmapist-server#readme for details.")
 		}
-		log.Fatal(err)
+		return err
 	}
-	s.WithLogger(log)
+	defer srv.Shutdown()
+	srv.WithLogger(log.Default())
 
-	srv := red.NewServer()
-	srv.WithLogger(log)
-	if args.Dbg {
-		srv.WithCommands()
+	ln, err := net.Listen("tcp", args.Addr)
+	if err != nil {
+		return err
 	}
-	s.Register(srv)
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-		log.Println(<-sigCh)
-		signal.Reset()
-		if err := s.Shutdown(); err != nil {
-			log.Fatal(err)
+	defer ln.Close()
+
+	group, ctx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		<-ctx.Done()
+		return ln.Close()
+	})
+	group.Go(func() error {
+		err := srv.Serve(ln, args.Dbg)
+		if err != nil && strings.Contains(err.Error(), "use of closed network connection") {
+			return nil
 		}
-		os.Exit(0)
-	}()
+		return err
+	})
 	if args.Bak != "" && args.Bak != args.File {
-		go func() {
+		group.Go(func() error {
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, syscall.SIGUSR1)
-			for range sigCh {
+			defer signal.Stop(sigCh)
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-sigCh:
+				}
 				log.Printf("backing up database to %q", args.Bak)
 				begin := time.Now()
-				switch err := doBackup(s, args.Bak); err {
+				switch err := doBackup(srv, args.Bak); err {
 				case nil:
 					log.Printf("backup successfully saved in %v", time.Since(begin).Round(500*time.Millisecond))
 				default:
 					log.Println("error doing backup:", err)
 				}
 			}
-		}()
+		})
 	}
-	log.Fatal(srv.ListenAndServe(args.Addr))
+
+	if err := group.Wait(); err != nil {
+		return err
+	}
+	return srv.Shutdown()
 }
 
 // doBackup creates temporary file, calls s.Backup on it and renames temporary

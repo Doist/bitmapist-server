@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -92,8 +93,12 @@ func New(dbFile string, relaxed bool) (*Server, error) {
 	return s, nil
 }
 
-// Register registers supported command handlers on provided srv
-func (s *Server) Register(srv *red.Server) {
+func (s *Server) Serve(ln net.Listener, debug bool) error {
+	srv := red.NewServer()
+	srv.WithLogger(s.log)
+	if debug {
+		srv.WithCommands()
+	}
 	srv.Handle("keys", s.handleKeys)
 	srv.Handle("setbit", s.handleSetbit)
 	srv.Handle("getbit", s.handleGetbit)
@@ -113,6 +118,7 @@ func (s *Server) Register(srv *red.Server) {
 	srv.Handle("pttl", s.handlePTTL)
 	srv.Handle("expire", s.handleExpire)
 	srv.Handle("rename", s.handleRename)
+	return srv.Serve(ln)
 }
 
 // Shutdown performs saves current state on disk and closes database. Shutdown

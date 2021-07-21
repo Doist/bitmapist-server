@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/artyom/red"
 	"github.com/artyom/resp"
 )
 
@@ -126,15 +125,13 @@ func newServer(t testing.TB, relaxed bool) (fn clientConnFunc, cleanup func()) {
 		t.Fatal(err)
 		return
 	}
-	redsrv := red.NewServer()
-	srv.Register(redsrv)
 	unixSocket := filepath.Join(td, "bitmapist.sock")
 	ln, err := net.Listen("unix", unixSocket)
 	if err != nil {
 		t.Fatal(err)
 		return
 	}
-	go func() { redsrv.Serve(ln) }()
+	go func() { srv.Serve(ln, false) }()
 	fn = func() net.Conn {
 		conn, err := net.DialTimeout("unix", unixSocket, time.Second)
 		if err != nil {
@@ -170,15 +167,13 @@ func TestServerPersistence(t *testing.T) {
 			t.Fatal(err)
 			return
 		}
-		redsrv := red.NewServer()
-		srv.Register(redsrv)
 		unixSocket := filepath.Join(td, "bitmapist.sock")
 		ln, err := net.Listen("unix", unixSocket)
 		if err != nil {
 			t.Fatal(err)
 			return
 		}
-		go func() { redsrv.Serve(ln) }()
+		go func() { srv.Serve(ln, false) }()
 		fn = func() net.Conn {
 			conn, err := net.DialTimeout("unix", unixSocket, time.Second)
 			if err != nil {
