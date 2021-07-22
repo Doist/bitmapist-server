@@ -235,21 +235,31 @@ func (s *Server) processDelayedSetBits(ctx context.Context) error {
 // updateKeyDelayedSetBits applies buffered SETBIT operations to a single
 // bitmap
 func (s *Server) updateKeyDelayedSetBits(now time.Time, name string, ones, zeros []uint32) (*roaring.Bitmap, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var err error
 	var data []byte
 	var keepTTL bool
-	bm := new(roaring.Bitmap)
-	switch err := s.stGetBitmapSelect.QueryRow(name, now.UnixNano()).Scan(&data); err {
-	case sql.ErrNoRows:
-	case nil:
-		if err = bm.UnmarshalBinary(data); err != nil {
+	bm, gotCached := s.getbitCache.Get(name)
+	if gotCached {
+		bm = bm.Clone() // cannot hold use original because we need to update it
+		// assume that cached bitmap is not expired yet; if it already expired,
+		// then saving it with TTL preserved will make it disappear once it's
+		// evicted from the cache
+		keepTTL = true
+	} else {
+		// for the opposite condition we can delay the lock until database write
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		bm = new(roaring.Bitmap)
+		switch err := s.stGetBitmapSelect.QueryRow(name, now.UnixNano()).Scan(&data); err {
+		case sql.ErrNoRows:
+		case nil:
+			if err = bm.UnmarshalBinary(data); err != nil {
+				return nil, err
+			}
+			keepTTL = true
+		default:
 			return nil, err
 		}
-		keepTTL = true
-	default:
-		return nil, err
 	}
 	bm.AddMany(ones)
 	for _, pos := range zeros { // TODO optimize this depending on slice size
@@ -257,6 +267,10 @@ func (s *Server) updateKeyDelayedSetBits(now time.Time, name string, ones, zeros
 	}
 	if data, err = bm.MarshalBinary(); err != nil {
 		return nil, err
+	}
+	if gotCached { // for the opposite condition lock is already held
+		s.mu.Lock()
+		defer s.mu.Unlock()
 	}
 	if keepTTL {
 		_, err = s.stPutBitmap2.Exec(name, data)
