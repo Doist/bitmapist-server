@@ -31,7 +31,7 @@ func main() {
 	flag.StringVar(&args.File, "db", args.File, "`path` to database file")
 	flag.StringVar(&args.Bak, "bak", args.Bak, "optional `path` to backup file; send SIGUSR1 to trigger online backup")
 	flag.BoolVar(&args.Dbg, "debug", args.Dbg, "log all commands")
-	flag.BoolVar(&args.Rel, "relaxed", args.Rel, "enable stale GETBIT reads and delayed SETBIT writes: this helps"+
+	flag.BoolVar(&args.Rel, "unsafe", args.Rel, "enable stale GETBIT reads and delayed SETBIT writes: this helps"+
 		"\nget better throughput on high GETBIT and SETBIT rates, when it's"+
 		"\nacceptable to get results which may be up to few minutes stale")
 	var versionOnly bool
