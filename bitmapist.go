@@ -118,6 +118,7 @@ func (s *Server) Serve(ln net.Listener, debug bool) error {
 	srv.Handle("pttl", s.handlePTTL)
 	srv.Handle("expire", s.handleExpire)
 	srv.Handle("rename", s.handleRename)
+	s.stats = srv.Stats
 	return srv.Serve(ln)
 }
 
@@ -155,6 +156,8 @@ type Server struct {
 	stMatchingKeysLim *sql.Stmt
 	stDelete          *sql.Stmt
 	stDeleteExpired   *sql.Stmt
+
+	stats func() []red.CmdCount
 
 	// relaxed mode enables stale GETBITs and buffered/delayed SETBITs
 	relaxed bool
@@ -603,17 +606,24 @@ func (s *Server) handleInfo(r red.Request) (interface{}, error) {
 		return nil, red.ErrWrongArgs
 	}
 	switch strings.ToLower(r.Args[0]) {
+	case "commands":
+		if s.stats != nil {
+			buf := new(bytes.Buffer)
+			for _, st := range s.stats() {
+				fmt.Fprintf(buf, "%s:%d\n", st.Name, st.Cnt)
+			}
+			return buf.Bytes(), nil
+		}
 	case "keys":
-	default:
-		return nil, red.ErrWrongArgs
+		var cnt int
+		if err := s.stInfo.QueryRow(time.Now().UnixNano()).Scan(&cnt); err != nil {
+			return nil, err
+		}
+		buf := new(bytes.Buffer)
+		fmt.Fprintf(buf, "keys_total:%d\n", cnt)
+		return buf.Bytes(), nil
 	}
-	var cnt int
-	if err := s.stInfo.QueryRow(time.Now().UnixNano()).Scan(&cnt); err != nil {
-		return nil, err
-	}
-	buf := new(bytes.Buffer)
-	fmt.Fprintf(buf, "keys_total:%d\n", cnt)
-	return buf.Bytes(), nil
+	return nil, red.ErrWrongArgs
 }
 
 func (s *Server) handleScan(r red.Request) (interface{}, error) {
