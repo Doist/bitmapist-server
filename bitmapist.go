@@ -173,32 +173,25 @@ type Server struct {
 
 // delayedSetBitOp represents SETBIT operation that can be delayed
 type delayedSetBitOp struct {
-	key    string
-	zero   bool // true if bit needs to be cleared
+	key string
+	delayedSetBitOpArgs
+}
+
+type delayedSetBitOpArgs struct {
 	offset uint32
+	zero   bool // true if bit needs to be cleared
 }
 
 func (s *Server) processDelayedSetBits(ctx context.Context) error {
 	defer close(s.bgProcessStopped)
-	incomingOnes := make(map[string][]uint32)
-	incomingZero := make(map[string][]uint32)
+	incomingOps := make(map[string][]delayedSetBitOpArgs)
 	processAccumulated := func(now time.Time) error {
-		for name := range incomingOnes {
-			bm, err := s.updateKeyDelayedSetBits(now, name, incomingOnes[name], incomingZero[name])
+		for name, args := range incomingOps {
+			bm, err := s.updateKeyDelayedSetBits(now, name, args)
 			if err != nil {
 				return err
 			}
-			delete(incomingOnes, name)
-			delete(incomingZero, name)
-			s.getbitCache.Add(name, bm)
-		}
-		// incomingOnes is empty at this point, but incomingZero may be not
-		for name := range incomingZero {
-			bm, err := s.updateKeyDelayedSetBits(now, name, nil, incomingZero[name])
-			if err != nil {
-				return err
-			}
-			delete(incomingZero, name)
+			delete(incomingOps, name)
 			s.getbitCache.Add(name, bm)
 		}
 		return nil
@@ -209,12 +202,7 @@ func (s *Server) processDelayedSetBits(ctx context.Context) error {
 	for {
 		select {
 		case now := <-ticker.C:
-			nKeys := len(incomingOnes)
-			for k := range incomingZero {
-				if incomingOnes[k] == nil {
-					nKeys++
-				}
-			}
+			nKeys := len(incomingOps)
 			if err := processAccumulated(now); err != nil {
 				s.log.Printf("applying %d delayed updates to %d keys: %v", cnt, nKeys, err)
 			}
@@ -226,18 +214,14 @@ func (s *Server) processDelayedSetBits(ctx context.Context) error {
 			return processAccumulated(time.Now())
 		case op := <-s.delayedSetBits:
 			cnt++
-			if op.zero {
-				incomingZero[op.key] = append(incomingZero[op.key], op.offset)
-			} else {
-				incomingOnes[op.key] = append(incomingOnes[op.key], op.offset)
-			}
+			incomingOps[op.key] = append(incomingOps[op.key], op.delayedSetBitOpArgs)
 		}
 	}
 }
 
 // updateKeyDelayedSetBits applies buffered SETBIT operations to a single
 // bitmap
-func (s *Server) updateKeyDelayedSetBits(now time.Time, name string, ones, zeros []uint32) (*roaring.Bitmap, error) {
+func (s *Server) updateKeyDelayedSetBits(now time.Time, name string, args []delayedSetBitOpArgs) (*roaring.Bitmap, error) {
 	var err error
 	var data []byte
 	var keepTTL bool
@@ -264,9 +248,20 @@ func (s *Server) updateKeyDelayedSetBits(now time.Time, name string, ones, zeros
 			return nil, err
 		}
 	}
-	bm.AddMany(ones)
-	for _, pos := range zeros { // TODO optimize this depending on slice size
-		bm.Remove(pos)
+	ones := make([]uint32, 0, len(args))
+	for _, v := range args {
+		if !v.zero {
+			ones = append(ones, v.offset)
+			continue
+		}
+		if len(ones) != 0 { // apply accumulated ones first
+			bm.AddMany(ones)
+			ones = ones[:0]
+		}
+		bm.Remove(v.offset)
+	}
+	if len(ones) != 0 {
+		bm.AddMany(ones)
 	}
 	if data, err = bm.MarshalBinary(); err != nil {
 		return nil, err
@@ -557,7 +552,7 @@ func (s *Server) handleSetbit(r red.Request) (interface{}, error) {
 			// this may technically block "forever" when server is shutting
 			// down and channel receiver stops, but that's ok, as terminated
 			// process will tear down TCP session
-			s.delayedSetBits <- delayedSetBitOp{key: r.Args[0], zero: r.Args[2] == "0", offset: uint32(offset)}
+			s.delayedSetBits <- delayedSetBitOp{key: r.Args[0], delayedSetBitOpArgs: delayedSetBitOpArgs{zero: r.Args[2] == "0", offset: uint32(offset)}}
 			return true, nil
 		}
 		return nil, red.ErrWrongArgs
