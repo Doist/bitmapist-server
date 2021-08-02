@@ -110,6 +110,7 @@ func (s *Server) Register(srv *red.Server) {
 	srv.Handle("pttl", s.handlePTTL)
 	srv.Handle("expire", s.handleExpire)
 	srv.Handle("rename", s.handleRename)
+	s.stats = srv.Stats
 }
 
 // Shutdown performs saves current state on disk and closes database. Shutdown
@@ -138,6 +139,8 @@ type Server struct {
 	done    chan struct{}
 	doneAck chan struct{}
 	save    chan struct{}
+
+	stats func() []red.CmdCount
 
 	mu    sync.Mutex
 	keys  map[string]struct{}  // all known keys
@@ -745,6 +748,14 @@ func (s *Server) handleInfo(r red.Request) (interface{}, error) {
 		return nil, red.ErrWrongArgs
 	}
 	switch strings.ToLower(r.Args[0]) {
+	case "commands":
+		if s.stats != nil {
+			buf := new(bytes.Buffer)
+			for _, st := range s.stats() {
+				fmt.Fprintf(buf, "%s:%d\n", st.Name, st.Cnt)
+			}
+			return buf.Bytes(), nil
+		}
 	case "keys":
 		buf := new(bytes.Buffer)
 		s.mu.Lock()
@@ -752,9 +763,8 @@ func (s *Server) handleInfo(r red.Request) (interface{}, error) {
 		fmt.Fprintf(buf, "keys_total:%d\n", len(s.keys))
 		fmt.Fprintf(buf, "keys_cached:%d\n", len(s.cache))
 		return buf.Bytes(), nil
-	default:
-		return nil, red.ErrWrongArgs
 	}
+	return nil, red.ErrWrongArgs
 }
 
 func (s *Server) handleScan(r red.Request) (interface{}, error) {
