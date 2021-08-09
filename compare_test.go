@@ -14,18 +14,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/artyom/resp"
 )
 
 func TestAgainstRedis(t *testing.T) {
+	t.Run("builtin-mock", func(t *testing.T) {
+		testAgainstRedis(t, newFakeRedis)
+	})
 	if _, err := exec.LookPath("redis-server"); err != nil {
-		t.Skip("redis-server not found in path, skipping test")
+		t.Logf("redis-server not found in path, skipping test")
+	} else {
+		t.Run("redis-server", func(t *testing.T) {
+			testAgainstRedis(t, newRedisServer)
+		})
 	}
+}
+
+func testAgainstRedis(t *testing.T, setup func(testing.TB) (clientConnFunc, func())) {
+	cfRedis, cleanupRedis := setup(t)
+	defer cleanupRedis()
+
 	cf, cleanup := newServer(t, false)
 	defer cleanup()
-
-	cfRedis, cleanupRedis := newRedisServer(t)
-	defer cleanupRedis()
 
 	cmds := []string{
 		"ping",
@@ -110,6 +121,26 @@ func collectOutput(cmds []string, cf clientConnFunc) ([]byte, error) {
 		fmt.Fprintf(buf, "< %#v\n", response)
 	}
 	return buf.Bytes(), nil
+}
+
+func newFakeRedis(t testing.TB) (fn clientConnFunc, cleanup func()) {
+	srv, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	fn = func() net.Conn {
+		conn, err := net.DialTimeout("tcp", srv.Addr(), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		return conn
+	}
+	cleanup = func() { srv.Close() }
+	return fn, cleanup
 }
 
 func newRedisServer(t testing.TB) (fn clientConnFunc, cleanup func()) {

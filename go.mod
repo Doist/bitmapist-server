@@ -2,6 +2,7 @@ module github.com/Doist/bitmapist-server/v2
 
 require (
 	github.com/RoaringBitmap/roaring v0.9.1
+	github.com/alicebob/miniredis/v2 v2.15.1
 	github.com/artyom/red v0.1.0
 	github.com/artyom/resp v1.0.0
 	github.com/artyom/status v0.1.0
@@ -13,11 +14,13 @@ require (
 )
 
 require (
+	github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a // indirect
 	github.com/bits-and-blooms/bitset v1.2.0 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/mattn/go-isatty v0.0.12 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
+	github.com/yuin/gopher-lua v0.0.0-20200816102855-ee81675732da // indirect
 	golang.org/x/mod v0.3.0 // indirect
 	golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1 // indirect
 	golang.org/x/term v0.0.0-20210615171337-6886f2dfbf5b // indirect
