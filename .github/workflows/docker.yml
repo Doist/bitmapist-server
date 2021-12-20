@@ -15,7 +15,7 @@ jobs:
     - uses: actions/setup-go@v1
       with:
         go-version: '1.16.x'
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
     - name: Get dependencies
       run: go mod download
     - name: Install redis
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
     - name: Build image
       run: |
         echo ${GITHUB_REF##*/} | tee ci-version.txt
