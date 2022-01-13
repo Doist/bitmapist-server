@@ -11,6 +11,7 @@ jobs:
   test:
     name: Test suite
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
     - uses: actions/setup-go@v1
       with:
@@ -27,6 +28,7 @@ jobs:
     name: Build and push Docker image
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
+    timeout-minutes: 5
     steps:
     - uses: actions/checkout@v1
     - name: Build image
