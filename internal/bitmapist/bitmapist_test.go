@@ -3,7 +3,6 @@ package bitmapist
 import (
 	"bufio"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -115,7 +114,7 @@ func checkResponse(t testing.TB, req string, respWanted interface{}, rd resp.Byt
 }
 
 func newServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
-	td, err := ioutil.TempDir("", "bitmapist-test-")
+	td, err := os.MkdirTemp("", "bitmapist-test-")
 	if err != nil {
 		t.Fatal(err)
 		return
@@ -158,7 +157,7 @@ func newServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
 type clientConnFunc func() net.Conn
 
 func TestServerPersistence(t *testing.T) {
-	td, err := ioutil.TempDir("", "bitmapist-test-")
+	td, err := os.MkdirTemp("", "bitmapist-test-")
 	if err != nil {
 		t.Fatal(err)
 		return

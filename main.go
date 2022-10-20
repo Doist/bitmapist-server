@@ -4,7 +4,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/signal"
@@ -97,7 +96,7 @@ func main() {
 // doBackup creates temporary file, calls s.Backup on it and renames temporary
 // file to dst if backup completed successfully.
 func doBackup(s *bitmapist.Server, dst string) error {
-	f, err := ioutil.TempFile(filepath.Dir(dst), "bitmapist-backup-")
+	f, err := os.CreateTemp(filepath.Dir(dst), "bitmapist-backup-")
 	if err != nil {
 		return err
 	}

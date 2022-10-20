@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -113,17 +112,16 @@ func collectOutput(cmds []string, cf clientConnFunc) ([]byte, error) {
 }
 
 func newRedisServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
-	td, err := ioutil.TempDir("", "bitmapist-test-")
+	td, err := os.MkdirTemp("", "bitmapist-test-")
 	if err != nil {
 		t.Fatal(err)
 		return
 	}
-	buf := new(bytes.Buffer)
-	fmt.Fprintln(buf, redisConf)
+	buf := bytes.NewBufferString(redisConf)
 	unixSocket := filepath.Join(td, "redis.sock")
 	fmt.Fprintf(buf, "\nunixsocket %s\n", unixSocket)
 	redisConf := filepath.Join(td, "redis.conf")
-	if err := ioutil.WriteFile(redisConf, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(redisConf, buf.Bytes(), 0644); err != nil {
 		os.RemoveAll(td)
 		t.Fatal(err)
 		return
@@ -161,15 +159,15 @@ func newRedisServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
 }
 
 func diff(resBitmapist, resRedis []byte) ([]byte, error) {
-	td, err := ioutil.TempDir("", "")
+	td, err := os.MkdirTemp("", "")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(td)
-	if err := ioutil.WriteFile(filepath.Join(td, "bmpst.txt"), resBitmapist, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(td, "bmpst.txt"), resBitmapist, 0644); err != nil {
 		return nil, err
 	}
-	if err := ioutil.WriteFile(filepath.Join(td, "redis.txt"), resRedis, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(td, "redis.txt"), resRedis, 0644); err != nil {
 		return nil, err
 	}
 	cmd := exec.Command("diff", "-u", "bmpst.txt", "redis.txt")
