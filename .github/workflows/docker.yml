@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-    - uses: actions/setup-go@v2
+    - uses: actions/setup-go@v5
       with:
-        go-version: '^1.0.0'
-    - uses: actions/checkout@v2
+        go-version: 'stable'
+    - uses: actions/checkout@v4
     - name: Get dependencies
       run: go mod download
     - name: Install redis
@@ -30,30 +30,26 @@ jobs:
     if: github.event_name == 'push'
     timeout-minutes: 5
     steps:
-    - uses: actions/checkout@v2
-    - name: Build image
+    - uses: actions/checkout@v4
+    - id: gen-tag
       run: |
-        echo ${GITHUB_REF##*/} | tee ci-version.txt
-        docker build . --tag image
-    - name: Log into registry
-      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${GITHUB_ACTOR} --password-stdin
-    - name: Push image
-      run: |
-        set -u
-        # https://help.github.com/en/actions/automating-your-workflow-with-github-actions/using-environment-variables
-        IMAGE_ID=docker.pkg.github.com/doist/$IMAGE_NAME/$IMAGE_NAME
-
-         # Strip git ref prefix from version
-        VERSION=${GITHUB_REF##*/}
-
-        # Strip "v" prefix from tag name
-        case "${GITHUB_REF}" in refs/tags/*) VERSION=${VERSION#v} ;; esac
-
-        case "$VERSION" in master) VERSION=latest ;; esac
-
-        echo IMAGE_ID=$IMAGE_ID
-        echo VERSION=$VERSION
-        echo GITHUB_REF=$GITHUB_REF
-
-        docker tag image $IMAGE_ID:$VERSION
-        docker push $IMAGE_ID:$VERSION
+        IMAGE_TAG=${GITHUB_REF##*/}
+        echo IMAGE_TAG | tee ci-version.txt
+        echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_PACKAGES_TOKEN }}
+      - uses: docker/build-push-action@v5
+        with:
+          push: true
+          platforms: |
+            linux/arm64
+            linux/amd64
+          tags: |
+            ghcr.io/doist/bitmapist-server:${{ steps.gen-tag.outputs.tag }}
+          outputs: type=image,oci-mediatypes=true,compression=zstd,compression-level=6,force-compression=true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
