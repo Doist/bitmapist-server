@@ -855,7 +855,7 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var src []*roaring.Bitmap
-	var haveEmpty bool
+	var haveEmpty, haveNonEmpty bool
 	for _, k := range sources {
 		bm, err := s.getBitmap(k, false, false)
 		if err != nil {
@@ -863,19 +863,18 @@ func (s *Server) bitopAnd(key string, sources []string) (int64, error) {
 		}
 		if bm != nil {
 			src = append(src, bm)
+			haveNonEmpty = true
 			continue
 		}
-		if len(src) > 0 {
-			// mix of found and missing keys, result would be empty
-			// (but set) bitmap
-			if !haveEmpty {
-				// in case of missing keys, as an optimization only add an empty bitmap once
-				src = append(src, roaring.NewBitmap())
-				haveEmpty = true
-			}
+		// mix of found and missing keys, result would be empty
+		// (but set) bitmap
+		if !haveEmpty {
+			// in case of missing keys, as an optimization only add an empty bitmap once
+			src = append(src, roaring.NewBitmap())
+			haveEmpty = true
 		}
 	}
-	if len(src) == 0 {
+	if !haveNonEmpty {
 		s.delete(false, key)
 		return 0, nil
 	}
