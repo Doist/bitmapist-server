@@ -73,6 +73,10 @@ func TestAgainstRedis(t *testing.T) {
 		"ttl dst_rename",
 		"getbit dst_rename 1",
 
+		"setbit xxx_somekey 256 1",
+		"bitop and xxx_dst xxx_somekey xxx_nonexistent",
+		"bitcount xxx_dst",
+
 		"quit",
 	}
 

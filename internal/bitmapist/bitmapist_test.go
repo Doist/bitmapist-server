@@ -65,7 +65,7 @@ func TestServer(t *testing.T) {
 	checkResponse(t, "set dst \x00\xa0", "OK", rd, conn)
 	checkResponse(t, "get dst", "\x00\xa0", rd, conn)
 
-	checkResponse(t, "bitop and dst foo bar", int64(1), rd, conn)
+	checkResponse(t, "bitop and dst foo bar", int64(2), rd, conn)
 	checkResponse(t, "bitcount dst", int64(1), rd, conn)
 	checkResponse(t, "getbit dst 10", int64(0), rd, conn)
 	checkResponse(t, "getbit dst 7", int64(1), rd, conn)
