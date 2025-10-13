@@ -128,6 +128,7 @@ func newRedisServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
 	}
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, "redis-server", redisConf)
+	cmd.Dir = td
 	if err := cmd.Start(); err != nil {
 		cancelFunc()
 		t.Fatal(err)
