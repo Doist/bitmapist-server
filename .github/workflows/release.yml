@@ -4,6 +4,9 @@ on:
     tags:
       - v*
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,21 +26,12 @@ jobs:
       run: |
         GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
           -trimpath -ldflags="-s -w -X=main.explicitVersion=${GITHUB_REF##*/}" -o bitmapist-server
-        GZIP=-9 tar czvf bitmapist-server-linux-amd64.tar.gz bitmapist-server
-    - name: Create release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
+        tar czvf bitmapist-server-linux-amd64.tar.gz bitmapist-server
+
+        GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+          -trimpath -ldflags="-s -w -X=main.explicitVersion=${GITHUB_REF##*/}" -o bitmapist-server
+        tar czvf bitmapist-server-linux-arm64.tar.gz bitmapist-server
+    - env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: ${{ github.ref }}
-    - name: Upload artifact
-      uses: actions/upload-release-asset@v1.0.1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./bitmapist-server-linux-amd64.tar.gz
-        asset_name: bitmapist-server-linux-amd64.tar.gz
-        asset_content_type: application/gzip
+      run: |
+        gh release create ${{ github.ref }} bitmapist-server-*.tar.gz
