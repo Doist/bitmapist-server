@@ -31,6 +31,14 @@ jobs:
         GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
           -trimpath -ldflags="-s -w -X=main.explicitVersion=${GITHUB_REF##*/}" -o bitmapist-server
         tar czvf bitmapist-server-linux-arm64.tar.gz bitmapist-server
+
+        GOOS=darwin GOARCH=amd64 go build \
+          -trimpath -ldflags="-s -w -X=main.explicitVersion=${GITHUB_REF##*/}" -o bitmapist-server
+        tar czvf bitmapist-server-macos-unsigned-amd64.tar.gz bitmapist-server
+
+        GOOS=darwin GOARCH=arm64 go build \
+          -trimpath -ldflags="-s -w -X=main.explicitVersion=${GITHUB_REF##*/}" -o bitmapist-server
+        tar czvf bitmapist-server-macos-unsigned-arm64.tar.gz bitmapist-server
     - env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
