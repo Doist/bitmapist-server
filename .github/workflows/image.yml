@@ -1,11 +1,8 @@
-name: Publish Docker image
+name: Publish container image
 on:
   push:
     tags:
       - v*
-
-env:
-  IMAGE_NAME: bitmapist-server
 
 jobs:
   test:
@@ -25,7 +22,7 @@ jobs:
       run: go test -v -race ./...
   push:
     needs: test
-    name: Build and push Docker image
+    name: Build and push container image
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     timeout-minutes: 5
@@ -50,6 +47,7 @@ jobs:
             linux/amd64
           tags: |
             ghcr.io/doist/bitmapist-server:${{ steps.gen-tag.outputs.tag }}
-          outputs: type=image,oci-mediatypes=true,compression=zstd,compression-level=6,force-compression=true
+            ghcr.io/doist/bitmapist-server:latest
+          outputs: type=image,oci-mediatypes=true
           cache-from: type=gha
           cache-to: type=gha,mode=max
