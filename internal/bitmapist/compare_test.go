@@ -26,88 +26,113 @@ func TestAgainstRedis(t *testing.T) {
 	cfRedis, cleanupRedis := newRedisServer(t)
 	defer cleanupRedis()
 
-	cmds := []string{
-		"ping",
-		"ping hello",
-		"multi",
-		"setbit foo 10 1",
-		"setbit foo 7 1",
-		"bitcount foo",
-		"setbit bar 7 1",
-		"setbit bar 6 1",
-		"setbit bar 6 0",
-		"bitcount bar",
-		"exec",
-		"get foo",
-		"get bar",
-
-		"bitop not dst foo",
-		"get dst",
-		"bitcount dst",
-		"getbit dst 5",
-
-		"bitop xor dst foo bar",
-		"get dst",
-
-		"bitop or dst foo bar",
-		"get dst",
-
-		"del foo bar",
-		"setbit foo 10 1",
-		"setbit foo 7 1",
-		"setbit bar 10 1",
-
-		"bitop and dst foo bar",
-		"get dst",
-		"set dst \xff\x7f",
-		"get dst",
-
-		"ttl nonexistent",
-		"ttl dst",
-		"expire dst 60",
-		"ttl dst",
-
-		"setbit src_rename 1 1",
-		"expire src_rename 60",
-		"rename src_rename dst_rename",
-		"ttl dst_rename",
-		"getbit dst_rename 1",
-
-		"bitop and xxx_dst xxx_nonexistent xxx_nonexistent",
-		"bitcount xxx_dst",
-		"exists xxx_dst",
-		"del xxx_dst",
-
-		"setbit xxx_somekey 256 1",
-		"bitop and xxx_dst xxx_nonexistent xxx_somekey",
-		"bitcount xxx_dst",
-
-		"quit",
+	type testCase struct {
+		name     string
+		commands []string
 	}
-
-	resBitmapist, err := collectOutput(cmds, cf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resRedis, err := collectOutput(cmds, cfRedis)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(resBitmapist, resRedis) {
-		if out, _ := diff(resBitmapist, resRedis); out != nil {
-			t.Logf("diff -u:\n%s\n", out)
-		}
-		t.Fatal("bitmapist and redis output differ")
+	for _, test := range []testCase{
+		{name: "basic", commands: []string{
+			"ping",
+			"ping hello",
+			"multi",
+			"setbit foo 10 1",
+			"setbit foo 7 1",
+			"bitcount foo",
+			"setbit bar 7 1",
+			"setbit bar 6 1",
+			"setbit bar 6 0",
+			"bitcount bar",
+			"exec",
+			"get foo",
+			"get bar",
+		}},
+		{name: "bitop xor", commands: []string{
+			"setbit foo 10 1",
+			"setbit foo 7 1",
+			"setbit bar 7 1",
+			"setbit bar 6 1",
+			"setbit bar 6 0",
+			"bitop xor dst foo bar",
+			"get dst",
+		}},
+		{name: "bitop not", commands: []string{
+			"setbit foo 10 1",
+			"bitop not dst foo",
+			"get dst",
+			"bitcount dst",
+			"getbit dst 5",
+		}},
+		{name: "bitop or", commands: []string{
+			"setbit foo 10 1",
+			"setbit bar 6 1",
+			"bitop or dst foo bar",
+			"get dst",
+		}},
+		{name: "bitop and", commands: []string{
+			"setbit foo 10 1",
+			"setbit foo 7 1",
+			"setbit bar 10 1",
+			"bitop and dst foo bar",
+			"get dst",
+			"set dst \xff\x7f",
+			"get dst",
+		}},
+		{name: "ttl", commands: []string{
+			"set dst \xff\x7f",
+			"ttl nonexistent",
+			"ttl dst",
+			"expire dst 60",
+			"ttl dst",
+		}},
+		{name: "rename", commands: []string{
+			"setbit src_rename 1 1",
+			"expire src_rename 60",
+			"rename src_rename dst_rename",
+			"ttl dst_rename",
+			"getbit dst_rename 1",
+		}},
+		{name: "bitop and nonexistent", commands: []string{
+			"bitop and xxx_dst xxx_nonexistent xxx_nonexistent",
+			"bitcount xxx_dst",
+			"exists xxx_dst",
+			"del xxx_dst",
+			"setbit xxx_somekey 256 1",
+			"bitop and xxx_dst xxx_nonexistent xxx_somekey",
+			"bitcount xxx_dst",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resBitmapist, err := flushAndCollectOutput(test.commands, cf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resRedis, err := flushAndCollectOutput(test.commands, cfRedis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(resBitmapist, resRedis) {
+				if out, _ := diff(t.TempDir(), resBitmapist, resRedis); out != nil {
+					t.Logf("diff -u:\n%s\n", out)
+				}
+				t.Fatal("bitmapist and redis output differ")
+			}
+		})
 	}
 }
 
-func collectOutput(cmds []string, cf clientConnFunc) ([]byte, error) {
+func flushAndCollectOutput(cmds []string, cf clientConnFunc) ([]byte, error) {
 	conn := cf()
 	defer conn.Close()
 	rd := bufio.NewReader(conn)
 	buf := new(bytes.Buffer)
+	if err := resp.Encode(conn, []string{"flushall"}); err != nil {
+		return nil, fmt.Errorf("flushall: %w", err)
+	}
+	if _, err := resp.Decode(rd); err != nil {
+		return nil, fmt.Errorf("flushall response: %w", err)
+	}
 	for _, cmd := range cmds {
-		fmt.Fprintf(buf, "> %s\n", cmd)
+		fmt.Fprintf(buf, "(client)> %s\n", cmd)
 		if err := resp.Encode(conn, strings.Fields(cmd)); err != nil {
 			return nil, err
 		}
@@ -115,17 +140,13 @@ func collectOutput(cmds []string, cf clientConnFunc) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(buf, "< %#v\n", response)
+		fmt.Fprintf(buf, "(server)> %#v\n", response)
 	}
 	return buf.Bytes(), nil
 }
 
 func newRedisServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
-	td, err := os.MkdirTemp("", "bitmapist-test-")
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
+	td := t.TempDir()
 	buf := bytes.NewBufferString(redisConf)
 	unixSocket := filepath.Join(td, "redis.sock")
 	fmt.Fprintf(buf, "\nunixsocket %s\n", unixSocket)
@@ -168,19 +189,14 @@ func newRedisServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
 	return fn, cleanup
 }
 
-func diff(resBitmapist, resRedis []byte) ([]byte, error) {
-	td, err := os.MkdirTemp("", "")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(td)
-	if err := os.WriteFile(filepath.Join(td, "bmpst.txt"), resBitmapist, 0644); err != nil {
+func diff(td string, resBitmapist, resRedis []byte) ([]byte, error) {
+	if err := os.WriteFile(filepath.Join(td, "bitmapist-server.txt"), resBitmapist, 0644); err != nil {
 		return nil, err
 	}
 	if err := os.WriteFile(filepath.Join(td, "redis.txt"), resRedis, 0644); err != nil {
 		return nil, err
 	}
-	cmd := exec.Command("diff", "-u", "bmpst.txt", "redis.txt")
+	cmd := exec.Command("diff", "-u", "bitmapist-server.txt", "redis.txt")
 	cmd.Dir = td
 	return cmd.CombinedOutput()
 }

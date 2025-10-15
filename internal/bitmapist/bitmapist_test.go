@@ -13,6 +13,7 @@ import (
 
 	"github.com/artyom/red"
 	"github.com/artyom/resp"
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestServer(t *testing.T) {
@@ -114,11 +115,7 @@ func checkResponse(t testing.TB, req string, respWanted interface{}, rd resp.Byt
 }
 
 func newServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
-	td, err := os.MkdirTemp("", "bitmapist-test-")
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
+	td := t.TempDir()
 	srv, err := New(filepath.Join(td, "temp.db"))
 	if err != nil {
 		os.RemoveAll(td)
@@ -127,6 +124,7 @@ func newServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
 	}
 	redsrv := red.NewServer()
 	srv.Register(redsrv)
+	redsrv.Handle("flushall", srv.handleFlush)
 	unixSocket := filepath.Join(td, "bitmapist.sock")
 	ln, err := net.Listen("unix", unixSocket)
 	if err != nil {
@@ -157,12 +155,7 @@ func newServer(t testing.TB) (fn clientConnFunc, cleanup func()) {
 type clientConnFunc func() net.Conn
 
 func TestServerPersistence(t *testing.T) {
-	td, err := os.MkdirTemp("", "bitmapist-test-")
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
-	defer os.RemoveAll(td)
+	td := t.TempDir()
 	newServerDirectory := func(t testing.TB) (fn clientConnFunc, cleanup func()) {
 		srv, err := New(filepath.Join(td, "temp.db"))
 		if err != nil {
@@ -211,4 +204,22 @@ func TestServerPersistence(t *testing.T) {
 	rd = bufio.NewReader(conn)
 	defer conn.Close()
 	checkResponse(t, "get foo", "\x01 ", rd, conn)
+}
+
+func (s *Server) handleFlush(r red.Request) (any, error) { // should only be used in tests
+	if len(r.Args) != 0 {
+		return nil, red.ErrWrongArgs
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.keys)
+	clear(s.cache)
+	clear(s.rm)
+	_ = s.db.Update(func(tx *bolt.Tx) error {
+		for _, name := range [][]byte{bucketName, expiresBucket} {
+			_ = tx.DeleteBucket(name)
+		}
+		return nil
+	})
+	return resp.OK, nil
 }
