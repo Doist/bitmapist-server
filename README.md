@@ -12,7 +12,7 @@ With the same dataset migrated to standalone bitmapist server under the same loa
 
 ## Installation
 
-For Linux, you can download the latest version of bitmapist-server from the [Releases GitHub page](https://github.com/Doist/bitmapist-server/releases).
+For Linux, you can download the latest version of bitmapist-server from the [Releases GitHub page](https://github.com/todoist/bitmapist-server/releases).
 
 For other platforms or if you want to build bitmapist-server from source, you need [Go](https://golang.org/dl/). To build bitmapist server:
 

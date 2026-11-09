@@ -46,8 +46,8 @@ jobs:
             linux/arm64
             linux/amd64
           tags: |
-            ghcr.io/doist/bitmapist-server:${{ steps.gen-tag.outputs.tag }}
-            ghcr.io/doist/bitmapist-server:latest
+            ghcr.io/todoist/bitmapist-server:${{ steps.gen-tag.outputs.tag }}
+            ghcr.io/todoist/bitmapist-server:latest
           outputs: type=image,oci-mediatypes=true
           cache-from: type=gha
           cache-to: type=gha,mode=max
