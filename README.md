@@ -1,6 +1,6 @@
 # Standalone bitmapist server
 
-This is a standalone server to be used with [bitmapist library](https://github.com/Doist/bitmapist4) instead of Redis.
+This is a standalone server to be used with [bitmapist library](https://github.com/todoist/bitmapist4) instead of Redis.
 
 Python bitmapist library relies on Redis bitmap operations and Redis stores bitmaps in plain byte arrays, which could become quite wasteful when you deal with big/sparse bitmaps. This standalone server implements a subset of Redis operations used by bitmapist library and relies on [compressed bitmaps representation](http://roaringbitmap.org) which saves a lot of memory. Another memory-saving technique used is only keeping *hot* dataset in memory.
 
@@ -12,7 +12,7 @@ With the same dataset migrated to standalone bitmapist server under the same loa
 
 ## Installation
 
-For Linux, you can download the latest version of bitmapist-server from the [Releases GitHub page](https://github.com/Doist/bitmapist-server/releases).
+For Linux, you can download the latest version of bitmapist-server from the [Releases GitHub page](https://github.com/todoist/bitmapist-server/releases).
 
 For other platforms or if you want to build bitmapist-server from source, you need [Go](https://golang.org/dl/). To build bitmapist server:
 
